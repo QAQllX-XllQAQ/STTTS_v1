@@ -67,9 +67,9 @@ if __name__ == '__main__':
     recorder = None
     displayed_text = ""  # Used for tracking text that was already displayed
 
-    end_of_sentence_detection_pause = 0.3
-    unknown_sentence_detection_pause = 0.5
-    mid_sentence_detection_pause = 1
+    end_of_sentence_detection_pause = 0.2
+    unknown_sentence_detection_pause = 0.3
+    mid_sentence_detection_pause = 0.2
 
     prev_text = ""
 
@@ -170,23 +170,23 @@ if __name__ == '__main__':
     # Recorder configuration
     recorder_config = {
         'spinner': False,
-        'model': 'tiny',  # distil-medium.en or large-v2 or deepdml/faster-whisper-large-v3-turbo-ct2 or ...
+        'model': 'base',  # distil-medium.en or large-v2 or deepdml/faster-whisper-large-v3-turbo-ct2 or ...
         'input_device_index': 1,
-        'realtime_model_type': 'tiny',  # Using the same model for realtime
+        'realtime_model_type': 'tiny',  # Using tiny for low-latency realtime updates
         'language': 'zh',
-        'silero_sensitivity': 0.05,
-        'webrtc_sensitivity': 3,
+        'silero_sensitivity': 0.01,
+        'webrtc_sensitivity': 2,
         'post_speech_silence_duration': unknown_sentence_detection_pause,
-        'min_length_of_recording': 1.1,
+        'min_length_of_recording': 0.5,
         'min_gap_between_recordings': 0,
         'enable_realtime_transcription': True,
         'realtime_processing_pause': 0.02,
         'on_realtime_transcription_update': text_detected,
         # 'on_realtime_transcription_stabilized': text_detected,
         'silero_deactivity_detection': True,
-        'early_transcription_on_silence': 0,
+        'early_transcription_on_silence': 0.2,
         'beam_size': 5,
-        'beam_size_realtime': 5,  # Matching beam_size for consistency
+        'beam_size_realtime': 3,  # Reduced for speed; accuracy still good with tiny model
         'no_log_file': True,
         'initial_prompt': "Use ellipses for incomplete sentences like: I went to the...",
         'device': 'cuda',          # Added device configuration
