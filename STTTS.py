@@ -170,9 +170,9 @@ if __name__ == '__main__':
     # Recorder configuration
     recorder_config = {
         'spinner': False,
-        'model': 'base',  # distil-medium.en or large-v2 or deepdml/faster-whisper-large-v3-turbo-ct2 or ...
+        'model': 'deepdml/faster-whisper-large-v3-turbo-ct2',  # High accuracy, low latency offline model
         'input_device_index': 1,
-        'realtime_model_type': 'tiny',  # Using tiny for low-latency realtime updates
+        'realtime_model_type': 'base',  # Upgraded from tiny for better live accuracy
         'language': 'zh',
         'silero_sensitivity': 0.01,
         'webrtc_sensitivity': 2,
@@ -185,8 +185,8 @@ if __name__ == '__main__':
         # 'on_realtime_transcription_stabilized': text_detected,
         'silero_deactivity_detection': True,
         'early_transcription_on_silence': 0.2,
-        'beam_size': 5,
-        'beam_size_realtime': 3,  # Reduced for speed; accuracy still good with tiny model
+        'beam_size': 5,               # For static / offline transcription
+        'beam_size_realtime': 2,      # Small beam keeps latency low with the base model
         'no_log_file': True,
         'initial_prompt': "Use ellipses for incomplete sentences like: I went to the...",
         'device': 'cuda',          # Added device configuration
