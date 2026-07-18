@@ -86,9 +86,10 @@ def stt_whisper(dev_idx, stop_event, on_text, log):
     rec = AudioToTextRecorder(
         spinner=False, model='tiny', input_device_index=dev_idx,
         realtime_model_type='tiny', language='zh',
-        silero_sensitivity=0.05, webrtc_sensitivity=3,
-        post_speech_silence_duration=0.5,
-        min_length_of_recording=1.1, min_gap_between_recordings=0,
+        silero_sensitivity=0.3, webrtc_sensitivity=2,
+        post_speech_silence_duration=0.2,
+        pre_recording_buffer_duration=0.5,
+        min_length_of_recording=0.5, min_gap_between_recordings=0.3,
     )
     log("Whisper STT ready")
     while not stop_event.is_set():
@@ -97,6 +98,7 @@ def stt_whisper(dev_idx, stop_event, on_text, log):
             on_text(t)
     try: rec.shutdown()
     except: pass
+
 
 def stt_google(dev_idx, api_key, stop_event, on_text, log):
     import pyaudio as pa, webrtcvad, collections
@@ -107,14 +109,18 @@ def stt_google(dev_idx, api_key, stop_event, on_text, log):
                     frames_per_buffer=CHUNK)
     vad = webrtcvad.Vad(VAD_MODE)
     log("Google STT ready (REST API)")
+    PRE_BUFFER_FRAMES = int(RATE / CHUNK * 0.5)  # 0.5s pre-buffer
+    ring_buffer = collections.deque(maxlen=PRE_BUFFER_FRAMES)
     while not stop_event.is_set():
         frames, triggered, silence = [], False, 0
-        MAX_SILENCE = int(RATE / CHUNK * 1.0)
+        MAX_SILENCE = int(RATE / CHUNK * 0.8)  # 0.8s silence = stop
         while not stop_event.is_set():
             data = stream.read(CHUNK, exception_on_overflow=False)
+            ring_buffer.append(data)
             if vad.is_speech(data, RATE):
                 if not triggered:
                     triggered = True
+                    frames.extend(ring_buffer)  # include pre-trigger audio
                 frames.append(data)
                 silence = 0
             elif triggered:
@@ -143,7 +149,6 @@ def stt_google(dev_idx, api_key, stop_event, on_text, log):
             log(f"Google STT error: {e}")
     stream.stop_stream(); stream.close(); p.terminate()
 
-# ── main window ──────────────────────────────────────────
 
 def main():
     in_devs = list_devices('input')
