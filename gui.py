@@ -30,6 +30,11 @@ def play_wav(path, device_idx=None):
     sd.play(data, sr, device=device_idx)
     sd.wait()
 
+EDGE_VOICES = ['zh-CN-XiaoxiaoNeural','zh-CN-XiaoyiNeural','zh-CN-YunjianNeural',
+               'zh-CN-YunxiNeural','zh-CN-YunyangNeural','zh-CN-XiaohanNeural']
+GOOGLE_VOICES = ['zh-CN-Wavenet-A','zh-CN-Wavenet-B','zh-CN-Wavenet-C','zh-CN-Wavenet-D',
+                 'zh-CN-Standard-A','zh-CN-Standard-B','zh-CN-Standard-C','zh-CN-Standard-D']
+
 # ── TTS ──────────────────────────────────────────────────
 
 def tts_gpt(text, ref_audio, prompt_lang, prompt_text, out_device):
@@ -59,7 +64,21 @@ def tts_edge(text, voice, out_device):
     sd.wait()
     return f"Edge-TTS OK"
 
-# ── STT workers ──────────────────────────────────────────
+def tts_google(text, voice, api_key, out_device):
+    url = f'https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}'
+    body = {
+        'input': {'text': text},
+        'voice': {'languageCode': 'zh-CN'},
+        'audioConfig': {'audioEncoding': 'LINEAR16', 'speakingRate': 1.0},
+    }
+    resp = requests.post(url, json=body, timeout=15)
+    if resp.status_code != 200:
+        return f"Google TTS failed: {resp.text[:200]}"
+    audio_bytes = base64.b64decode(resp.json()['audioContent'])
+    tmp = os.path.join(tempfile.gettempdir(), 'google_tts.wav')
+    with open(tmp, 'wb') as f: f.write(audio_bytes)
+    play_wav(tmp, out_device)
+    return f"Google TTS OK"
 
 def stt_whisper(dev_idx, stop_event, on_text, log):
     from RealtimeSTT import AudioToTextRecorder
@@ -80,26 +99,49 @@ def stt_whisper(dev_idx, stop_event, on_text, log):
     except: pass
 
 def stt_google(dev_idx, api_key, stop_event, on_text, log):
-    import speech_recognition as sr
-    r = sr.Recognizer()
-    mic = sr.Microphone(device_index=dev_idx)
-    log("Google STT adjusting for ambient noise...")
-    with mic as source:
-        r.adjust_for_ambient_noise(source, duration=1)
-    log("Google STT ready")
+    import pyaudio as pa, webrtcvad, collections
+    RATE, CHUNK, VAD_MODE = 16000, 480, 1
+    p = pa.PyAudio()
+    stream = p.open(format=pa.paInt16, channels=1, rate=RATE,
+                    input=True, input_device_index=dev_idx,
+                    frames_per_buffer=CHUNK)
+    vad = webrtcvad.Vad(VAD_MODE)
+    log("Google STT ready (REST API)")
     while not stop_event.is_set():
+        frames, triggered, silence = [], False, 0
+        MAX_SILENCE = int(RATE / CHUNK * 1.0)
+        while not stop_event.is_set():
+            data = stream.read(CHUNK, exception_on_overflow=False)
+            if vad.is_speech(data, RATE):
+                if not triggered:
+                    triggered = True
+                frames.append(data)
+                silence = 0
+            elif triggered:
+                frames.append(data)
+                silence += 1
+                if silence > MAX_SILENCE:
+                    break
+        if not frames or stop_event.is_set():
+            continue
+        body = {
+            'config': {'encoding':'LINEAR16','sampleRateHertz':RATE,'languageCode':'zh-CN'},
+            'audio': {'content': base64.b64encode(b''.join(frames)).decode()}
+        }
+        url = f'https://speech.googleapis.com/v1/speech:recognize?key={api_key}'
         try:
-            with mic as source:
-                audio = r.listen(source, timeout=5, phrase_time_limit=10)
-            text = r.recognize_google_cloud(audio, api_key=api_key, language='zh-CN')
-            if text and not stop_event.is_set():
-                on_text(text)
-        except sr.WaitTimeoutError:
-            continue
-        except sr.UnknownValueError:
-            continue
+            resp = requests.post(url, json=body, timeout=15)
+            if resp.status_code == 200:
+                results = resp.json().get('results')
+                if results:
+                    text = results[0]['alternatives'][0]['transcript']
+                    if text and not stop_event.is_set():
+                        on_text(text)
+            else:
+                log(f"Google STT API error: {resp.status_code}")
         except Exception as e:
             log(f"Google STT error: {e}")
+    stream.stop_stream(); stream.close(); p.terminate()
 
 # ── main window ──────────────────────────────────────────
 
@@ -118,18 +160,16 @@ def main():
                 default_text='AIzaSyB1C5UCP1kTB0uQoXAxKPMWrVg8ym24qyU', password_char='*')],
         ])],
         [sg.Frame('TTS Engine', [
-            [sg.Radio('GPT-SoVITS', 'TTS', key='TTS_GPT', default=True),
-             sg.Radio('Edge-TTS', 'TTS', key='TTS_EDGE')],
-            [sg.Text('Ref audio:'), sg.Input(key='REF', size=(42,1),
-                default_text=r"I:\STTTS\GPT-SoVITS_Mortis_Mutsumi_0104等3个文件\GPT-SoVITS_Mortis_Mutsumi_0104\model_Mutsumi_beta_0103\model_Mutsumi_beta_0103\サキ、ムシカが壊れたらサキも.wav"),
-             sg.FileBrowse(file_types=(("WAV", "*.wav"),))],
-            [sg.Text('Voice:'), sg.Combo(
-                ['zh-CN-XiaoxiaoNeural','zh-CN-XiaoyiNeural','zh-CN-YunjianNeural',
-                 'zh-CN-YunxiNeural','zh-CN-YunyangNeural','zh-CN-XiaohanNeural'],
-                default_value='zh-CN-XiaoxiaoNeural', key='VOICE', size=(30,1))],
-            [sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14,1)),
+            [sg.Radio('GPT-SoVITS', 'TTS', key='TTS_GPT', default=True, enable_events=True),
+             sg.Radio('Edge-TTS', 'TTS', key='TTS_EDGE', enable_events=True),
+             sg.Radio('Google TTS', 'TTS', key='TTS_GOOGLE', enable_events=True)],
+            [sg.pin(sg.Col([[sg.Text('Ref audio:'), sg.Input(key='REF', size=(42,1),
+                default_text=os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS_Mortis_Mutsumi_0104等3个文件', 'GPT-SoVITS_Mortis_Mutsumi_0104', 'model_Mutsumi_beta_0103', 'model_Mutsumi_beta_0103', 'サキ、ムシカが壊れたらサキも.wav')),
+             sg.FileBrowse(file_types=(("WAV", "*.wav"),))]], key='COL_REF', visible=True))],
+            [sg.pin(sg.Col([[sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14,1)),
              sg.Button('■ GPT-SoVITS', key='GPT_STOP', size=(14,1), disabled=True, button_color='red'),
-             sg.Text(check_gptsovits(), key='SRV', size=(16,1))],
+             sg.Text(check_gptsovits(), key='SRV', size=(16,1))]], key='COL_GPT', visible=True))],
+            [sg.Combo(EDGE_VOICES, default_value='zh-CN-XiaoxiaoNeural', key='VOICE', size=(30,1))],
         ])],
         [sg.Frame('Audio Output', [
             [sg.Text('Play to:'), sg.Combo(out_devs, default_value=def_dev_out, key='DEV_OUT', size=(50,1))],
@@ -156,6 +196,19 @@ def main():
                os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS', 'api_v2.py'), '-a', '127.0.0.1', '-p', '9880',
                '-c', r'GPT_SoVITS/configs/tts_infer.yaml']
 
+    def switch_tts(tts_mode):
+        show_gpt = tts_mode == 'gpt'
+        window['COL_REF'].update(visible=show_gpt)
+        window['COL_GPT'].update(visible=show_gpt)
+        if tts_mode == 'edge':
+            window['VOICE'].update(values=EDGE_VOICES, value='zh-CN-XiaoxiaoNeural')
+        elif tts_mode == 'google':
+            window['VOICE'].update(values=GOOGLE_VOICES, value='zh-CN-Wavenet-A')
+        else:
+            window['VOICE'].update(values=[], value='')
+
+    # Apply initial visibility
+    switch_tts('gpt')
 
     def log(msg):
         window.write_event_value('_LOG', f"[{time.strftime('%H:%M:%S')}] {msg}")
@@ -165,6 +218,8 @@ def main():
         log(f"Recognized: {text}")
         if cfg['tts'] == 'gpt':
             threading.Thread(target=lambda: do_gpt(text, cfg), daemon=True).start()
+        elif cfg['tts'] == 'google':
+            threading.Thread(target=lambda: do_google(text, cfg), daemon=True).start()
         else:
             threading.Thread(target=lambda: do_edge(text, cfg), daemon=True).start()
 
@@ -176,6 +231,9 @@ def main():
 
     def do_edge(text, cfg):
         log(tts_edge(text, cfg['voice'], cfg.get('dev_out')))
+
+    def do_google(text, cfg):
+        log(tts_google(text, cfg['voice'], cfg['gkey'], cfg.get('dev_out')))
 
     def run(cfg):
         cb = lambda t: handle_text(t, cfg)
@@ -199,17 +257,17 @@ def main():
                 except: pass
             break
 
+        # TTS radio toggle
+        if event in ('TTS_GPT', 'TTS_EDGE', 'TTS_GOOGLE'):
+            if values['TTS_GPT']: switch_tts('gpt')
+            elif values['TTS_EDGE']: switch_tts('edge')
+            elif values['TTS_GOOGLE']: switch_tts('google')
+
         # Periodic server health check
         if event == '__TIMEOUT__':
-            was_running = '✅' in window['SRV'].get()
             now_running = update_srv_status()
-            # Auto-update button states
-            if now_running:
-                window['GPT_START'].update(disabled=True)
-                window['GPT_STOP'].update(disabled=False)
-            else:
-                window['GPT_START'].update(disabled=False)
-                window['GPT_STOP'].update(disabled=True)
+            window['GPT_START'].update(disabled=now_running)
+            window['GPT_STOP'].update(disabled=not now_running)
             continue
 
         if event == 'GPT_START':
@@ -220,8 +278,7 @@ def main():
                 import subprocess
                 gpt_process = subprocess.Popen(GPT_CMD,
                     cwd=os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS'),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL)
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 log(f"GPT-SoVITS starting (PID {gpt_process.pid}), wait ~40s...")
                 window['GPT_START'].update(disabled=True)
 
@@ -239,7 +296,7 @@ def main():
         if event == 'START':
             cfg = {
                 'stt': 'whisper' if values['STT_W'] else 'google',
-                'tts': 'gpt' if values['TTS_GPT'] else 'edge',
+                'tts': 'gpt' if values['TTS_GPT'] else ('google' if values['TTS_GOOGLE'] else 'edge'),
                 'dev_in': int(values['DEV_IN'].split(':')[0]),
                 'dev_out': int(values['DEV_OUT'].split(':')[0]) if values['DEV_OUT'] else None,
                 'ref': values['REF'],
@@ -247,6 +304,8 @@ def main():
                 'voice': values['VOICE'],
             }
             if cfg['stt'] == 'google' and not cfg['gkey']:
+                sg.popup_error('Google API key required!'); continue
+            if cfg['tts'] == 'google' and not cfg['gkey']:
                 sg.popup_error('Google API key required!'); continue
             if cfg['tts'] == 'gpt' and not os.path.exists(cfg['ref']):
                 sg.popup_error('Ref audio not found!'); continue
