@@ -1,13 +1,12 @@
 # STTTS_v1
 
-Speech-to-Text → Text-to-Speech 实时语音转换工具。支持 Windows / macOS。
+Speech-to-Text → Text-to-Speech 实时语音转换工具。macOS 版本。
 
 ## 快速开始
 
 ```bash
 pip install -r requirements.txt
-python3 gui.py          # macOS / Linux
-python gui.py           # Windows
+python3 gui.py
 ```
 
 Windows 双击 `启动GUI.bat` · macOS 双击 `启动GUI.command`
