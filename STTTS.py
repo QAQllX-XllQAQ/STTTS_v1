@@ -8,7 +8,8 @@ if __name__ == '__main__':
     import time
     import requests
     import json
-    import winsound
+    import sounddevice as sd
+    import soundfile as sf
     
     
 
@@ -31,8 +32,10 @@ if __name__ == '__main__':
             print("The program requires the 'rich' library to run. Exiting...")
             sys.exit(1)
             
-
-    import keyboard
+    try:
+                HAS_KEYBOARD = True
+    except ImportError:
+        HAS_KEYBOARD = False
     #import pyperclip
 
     if EXTENDED_LOGGING:
@@ -415,31 +418,28 @@ if __name__ == '__main__':
 
     import tempfile as _tempfile
     def gptsovits_tts(text):
-        """Call GPT-SoVITS API and play audio"""
         if not text:
             return
         try:
             url = 'http://127.0.0.1:9880/tts'
             params = {
-                'text': text,
-                'text_lang': 'zh',
+                'text': text, 'text_lang': 'zh',
                 'ref_audio_path': r"I:\STTTS\GPT-SoVITS_Mortis_Mutsumi_0104等3个文件\GPT-SoVITS_Mortis_Mutsumi_0104\model_Mutsumi_beta_0103\model_Mutsumi_beta_0103\サキ、ムシカが壊れたらサキも.wav",
-                'prompt_lang': 'ja',
-                'prompt_text': '',
-                'text_split_method': 'cut5',
-                'batch_size': 1,
-                'media_type': 'wav',
-                'streaming_mode': False
+                'prompt_lang': 'ja', 'prompt_text': '',
+                'text_split_method': 'cut5', 'batch_size': 1,
+                'media_type': 'wav', 'streaming_mode': False
             }
             resp = requests.get(url, params=params, timeout=30)
             if resp.status_code == 200 and len(resp.content) > 1000:
-                tmp = os.path.join(_tempfile.gettempdir(), 'gptsovits_tmp.wav')
+                tmp = os.path.join(_tempfile.gettempdir(), 'gpt_tmp.wav')
                 with open(tmp, 'wb') as f:
                     f.write(resp.content)
-                winsound.PlaySound(tmp, winsound.SND_FILENAME)
-                console.print(f"[bold green]TTS OK: {len(resp.content)} bytes[/bold green]")
+                data, sr = sf.read(tmp)
+                sd.play(data, sr)
+                sd.wait()
+                console.print(f"[bold green]TTS OK: {len(resp.content)//1024}KB[/bold green]")
             else:
-                console.print(f"[bold red]TTS failed: {resp.text[:200]}[/bold red]")
+                console.print(f"[bold red]TTS failed: {resp.text[:100]}[/bold red]")
         except Exception as e:
             console.print(f"[bold red]TTS error: {e}[/bold red]")
 
@@ -485,24 +485,24 @@ if __name__ == '__main__':
     transcription_thread = threading.Thread(target=transcription_loop, daemon=True)
     transcription_thread.start()
 
-    keyboard.add_hotkey('F1', reading_live, suppress=True)
-    keyboard.add_hotkey('F2', reading, suppress=True)
-    keyboard.add_hotkey('F3', clear_display, suppress=True)
-    keyboard.add_hotkey('F5', reset_transcription, suppress=True)
+    if HAS_KEYBOARD:
+        keyboard.add_hotkey('F1', reading_live, suppress=True)
+        keyboard.add_hotkey('F2', reading, suppress=True)
+        keyboard.add_hotkey('F3', clear_display, suppress=True)
+        keyboard.add_hotkey('F5', reset_transcription, suppress=True)
 
     # Keep the main thread running and handle graceful exit
     try:
-        keyboard.wait()  # Waits indefinitely, until a hotkey triggers an exit or Ctrl+C
+        if HAS_KEYBOARD:
+            keyboard.wait()
+        else:
+            while True:
+                time.sleep(1)
     except KeyboardInterrupt:
         console.print("[bold yellow]KeyboardInterrupt received. Exiting...[/bold yellow]")
     finally:
-        # Signal threads to exit
         exit_event.set()
-
-        # Reset transcription if needed
         reset_transcription()
-
-        # Stop the recorder
         try:
             if hasattr(recorder, 'stop'):
                 recorder.stop()
@@ -510,16 +510,9 @@ if __name__ == '__main__':
                 recorder.close()
         except Exception as e:
             console.print(f"[bold red]Error stopping recorder: {e}[/bold red]")
-
-        # Allow some time for threads to finish
         time.sleep(1)
-
-        # Wait for transcription_thread to finish
         if transcription_thread.is_alive():
             transcription_thread.join(timeout=5)
-
-        # Stop the Live console
         live.stop()
-
         console.print("[bold red]Exiting gracefully...[/bold red]")
         sys.exit(0)

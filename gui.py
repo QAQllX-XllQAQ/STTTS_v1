@@ -153,7 +153,7 @@ def main():
     stop_event = threading.Event()
     gpt_process = None
     GPT_CMD = ['conda', 'run', '-n', 'GPTSoVits', 'python',
-               r'I:\STTTS\GPT-SoVITS\api_v2.py', '-a', '127.0.0.1', '-p', '9880',
+               os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS', 'api_v2.py'), '-a', '127.0.0.1', '-p', '9880',
                '-c', r'GPT_SoVITS/configs/tts_infer.yaml']
 
 
@@ -219,7 +219,7 @@ def main():
                 log("Starting GPT-SoVITS...")
                 import subprocess
                 gpt_process = subprocess.Popen(GPT_CMD,
-                    cwd=r'I:\STTTS\GPT-SoVITS',
+                    cwd=os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS'),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL)
                 log(f"GPT-SoVITS starting (PID {gpt_process.pid}), wait ~40s...")
