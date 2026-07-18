@@ -3,7 +3,7 @@ EXTENDED_LOGGING = False
 if __name__ == '__main__':
 
     import subprocess
-    import sys
+    import os, sys
     import threading
     import time
     import requests
