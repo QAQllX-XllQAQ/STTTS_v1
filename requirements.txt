@@ -1,0 +1,9 @@
+PySimpleGUI>=5.0
+requests>=2.28
+PyAudio>=0.2.14
+webrtcvad-wheels>=2.0.14
+sounddevice>=0.5
+soundfile>=0.12
+edge-tts>=7.0
+SpeechRecognition>=3.17
+keyboard>=0.13
