@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.wav
+*.mp3
+
+# STTTS runtime
+GPT-SoVITS/
+GPT-SoVITS_Mortis_Mutsumi_0104等3个文件/
+sttts.log
+gui.log
+gptsovits.log
+server2_test.log
+test_*.wav
+
+# OS
+Thumbs.db
+.DS_Store
