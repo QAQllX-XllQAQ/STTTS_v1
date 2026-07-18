@@ -100,7 +100,8 @@ def stt_whisper(dev_idx, stop_event, on_text, log):
     except: pass
 
 
-def stt_google(dev_idx, api_key, stop_event, on_text, log):
+def stt_google_vad(dev_idx, api_key, stop_event, on_text, log):
+    """Local VAD + REST API: webrtcvad detects speech, sends only speech segments"""
     import pyaudio as pa, webrtcvad, collections
     RATE, CHUNK, VAD_MODE = 16000, 480, 1
     p = pa.PyAudio()
@@ -108,19 +109,19 @@ def stt_google(dev_idx, api_key, stop_event, on_text, log):
                     input=True, input_device_index=dev_idx,
                     frames_per_buffer=CHUNK)
     vad = webrtcvad.Vad(VAD_MODE)
-    log("Google STT ready (REST API)")
-    PRE_BUFFER_FRAMES = int(RATE / CHUNK * 0.5)  # 0.5s pre-buffer
+    log("Google STT ready (local VAD mode)")
+    PRE_BUFFER_FRAMES = int(RATE / CHUNK * 0.5)
     ring_buffer = collections.deque(maxlen=PRE_BUFFER_FRAMES)
     while not stop_event.is_set():
         frames, triggered, silence = [], False, 0
-        MAX_SILENCE = int(RATE / CHUNK * 0.8)  # 0.8s silence = stop
+        MAX_SILENCE = int(RATE / CHUNK * 0.8)
         while not stop_event.is_set():
             data = stream.read(CHUNK, exception_on_overflow=False)
             ring_buffer.append(data)
             if vad.is_speech(data, RATE):
                 if not triggered:
                     triggered = True
-                    frames.extend(ring_buffer)  # include pre-trigger audio
+                    frames.extend(ring_buffer)
                 frames.append(data)
                 silence = 0
             elif triggered:
@@ -149,6 +150,42 @@ def stt_google(dev_idx, api_key, stop_event, on_text, log):
             log(f"Google STT error: {e}")
     stream.stop_stream(); stream.close(); p.terminate()
 
+def stt_google_cloud(dev_idx, api_key, stop_event, on_text, log):
+    """Cloud VAD mode: send 2s fixed chunks, let Google handle VAD"""
+    import pyaudio as pa, base64 as b64
+    RATE, CHUNK_DURATION = 16000, 2.0
+    CHUNK_SIZE = int(RATE * CHUNK_DURATION)
+    p = pa.PyAudio()
+    stream = p.open(format=pa.paInt16, channels=1, rate=RATE,
+                    input=True, input_device_index=dev_idx,
+                    frames_per_buffer=1024)
+    log("Google STT ready (cloud VAD mode)")
+    buffer = []
+    bytes_read = 0
+    while not stop_event.is_set():
+        data = stream.read(1024, exception_on_overflow=False)
+        buffer.append(data)
+        bytes_read += len(data)
+        if bytes_read >= CHUNK_SIZE * 2:
+            audio_bytes = b''.join(buffer)
+            buffer = []; bytes_read = 0
+            body = {
+                'config': {'encoding':'LINEAR16','sampleRateHertz':RATE,'languageCode':'zh-CN',
+                           'enableAutomaticPunctuation':True},
+                'audio': {'content': b64.b64encode(audio_bytes).decode()}
+            }
+            url = f'https://speech.googleapis.com/v1/speech:recognize?key={api_key}'
+            try:
+                resp = requests.post(url, json=body, timeout=15)
+                if resp.status_code == 200:
+                    results = resp.json().get('results')
+                    if results:
+                        text = results[0]['alternatives'][0]['transcript']
+                        if text and not stop_event.is_set():
+                            on_text(text)
+            except Exception as e:
+                pass  # silent
+    stream.stop_stream(); stream.close(); p.terminate()
 
 def main():
     in_devs = list_devices('input')
@@ -158,8 +195,10 @@ def main():
 
     layout = [
         [sg.Frame('STT Engine', [
-            [sg.Radio('Whisper (local GPU)', 'STT', key='STT_W', default=True),
-             sg.Radio('Google Cloud STT', 'STT', key='STT_G')],
+            [sg.Radio('Whisper (local GPU)', 'STT', key='STT_W', default=True, enable_events=True),
+             sg.Radio('Google Cloud STT', 'STT', key='STT_G', enable_events=True)],
+            [sg.pin(sg.Col([[sg.Radio('Local VAD + REST (save cost)', 'GOOGLE_MODE', key='GM_VAD', default=True),
+              sg.Radio('Cloud process (full audio)', 'GOOGLE_MODE', key='GM_CLOUD')]], key='COL_GM', visible=True))],
             [sg.Text('Input device:'), sg.Combo(in_devs, default_value=def_dev_in, key='DEV_IN', size=(50,1))],
             [sg.Text('Google key:'), sg.Input(key='GKEY', size=(50,1),
                 default_text='AIzaSyB1C5UCP1kTB0uQoXAxKPMWrVg8ym24qyU', password_char='*')],
@@ -244,14 +283,20 @@ def main():
         cb = lambda t: handle_text(t, cfg)
         if cfg['stt'] == 'whisper':
             stt_whisper(cfg['dev_in'], stop_event, cb, log)
+        elif cfg['stt'] == 'google_vad':
+            stt_google_vad(cfg['dev_in'], cfg['gkey'], stop_event, cb, log)
         else:
-            stt_google(cfg['dev_in'], cfg['gkey'], stop_event, cb, log)
+            stt_google_cloud(cfg['dev_in'], cfg['gkey'], stop_event, cb, log)
         window.write_event_value('_STATUS', '⏹ Stopped')
+
 
     def update_srv_status():
         st = check_gptsovits()
         window['SRV'].update(st)
         return '✅' in st
+
+    # Initial visibility
+    window['COL_GM'].update(visible=False)
 
     while True:
         event, values = window.read(timeout=2000)
@@ -261,6 +306,10 @@ def main():
                 try: gpt_process.terminate()
                 except: pass
             break
+
+        # STT radio toggle → show Google mode options
+        if event in ('STT_W', 'STT_G'):
+            window['COL_GM'].update(visible=values['STT_G'])
 
         # TTS radio toggle
         if event in ('TTS_GPT', 'TTS_EDGE', 'TTS_GOOGLE'):
@@ -299,20 +348,20 @@ def main():
             update_srv_status()
 
         if event == 'START':
+            gm = 'google_vad' if values.get('GM_VAD', True) else 'google_cloud'
+            stt = 'whisper' if values['STT_W'] else gm
+            tts = 'gpt' if values['TTS_GPT'] else ('google' if values['TTS_GOOGLE'] else 'edge')
             cfg = {
-                'stt': 'whisper' if values['STT_W'] else 'google',
-                'tts': 'gpt' if values['TTS_GPT'] else ('google' if values['TTS_GOOGLE'] else 'edge'),
+                'stt': stt, 'tts': tts,
                 'dev_in': int(values['DEV_IN'].split(':')[0]),
                 'dev_out': int(values['DEV_OUT'].split(':')[0]) if values['DEV_OUT'] else None,
-                'ref': values['REF'],
-                'gkey': values['GKEY'],
-                'voice': values['VOICE'],
+                'ref': values['REF'], 'gkey': values['GKEY'], 'voice': values['VOICE'],
             }
-            if cfg['stt'] == 'google' and not cfg['gkey']:
+            if stt.startswith('google') and not cfg['gkey']:
                 sg.popup_error('Google API key required!'); continue
-            if cfg['tts'] == 'google' and not cfg['gkey']:
+            if tts == 'google' and not cfg['gkey']:
                 sg.popup_error('Google API key required!'); continue
-            if cfg['tts'] == 'gpt' and not os.path.exists(cfg['ref']):
+            if tts == 'gpt' and not os.path.exists(cfg['ref']):
                 sg.popup_error('Ref audio not found!'); continue
 
             stop_event.clear()
@@ -337,4 +386,11 @@ def main():
     window.close()
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        with open(os.path.join(os.path.dirname(__file__) or '.', 'gui_error.log'), 'w') as f:
+            traceback.print_exc(file=f)
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, f"STTTS GUI crashed:\n\n{traceback.format_exc()}", "STTTS Error", 0x10)
