@@ -39,6 +39,3 @@ STTTS_v1/
 - **Google Cloud STT**: 需要 API key（GUI 中填写）
 - **Whisper 模型**: 首次使用自动下载（~75MB tiny 或 ~3GB large-v2）
 
-## 模型文件
-
-Mutsumi 等微调模型体积较大 (>100MB)，不在仓库中，请自行放置。
