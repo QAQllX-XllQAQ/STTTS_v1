@@ -208,7 +208,7 @@ def main():
              sg.Radio('Edge-TTS', 'TTS', key='TTS_EDGE', enable_events=True),
              sg.Radio('Google TTS', 'TTS', key='TTS_GOOGLE', enable_events=True)],
             [sg.pin(sg.Col([[sg.Text('Ref audio:'), sg.Input(key='REF', size=(42,1),
-                default_text=os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS_Mortis_Mutsumi_0104等3个文件', 'GPT-SoVITS_Mortis_Mutsumi_0104', 'model_Mutsumi_beta_0103', 'model_Mutsumi_beta_0103', 'サキ、ムシカが壊れたらサキも.wav')),
+                default_text=os.path.join(os.path.dirname(__file__) or '.', 'ref_audio.wav')),
              sg.FileBrowse(file_types=(("WAV", "*.wav"),))]], key='COL_REF', visible=True))],
             [sg.pin(sg.Col([[sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14,1)),
              sg.Button('■ GPT-SoVITS', key='GPT_STOP', size=(14,1), disabled=True, button_color='red'),
