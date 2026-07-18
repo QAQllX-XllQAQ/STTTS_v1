@@ -201,7 +201,7 @@ def main():
               sg.Radio('Cloud process (full audio)', 'GOOGLE_MODE', key='GM_CLOUD')]], key='COL_GM', visible=True))],
             [sg.Text('Input device:'), sg.Combo(in_devs, default_value=def_dev_in, key='DEV_IN', size=(50,1))],
             [sg.Text('Google key:'), sg.Input(key='GKEY', size=(50,1),
-                default_text='AIzaSyB1C5UCP1kTB0uQoXAxKPMWrVg8ym24qyU', password_char='*')],
+                default_text='YOUR_GOOGLE_API_KEY', password_char='*')],
         ])],
         [sg.Frame('TTS Engine', [
             [sg.Radio('GPT-SoVITS', 'TTS', key='TTS_GPT', default=True, enable_events=True),
