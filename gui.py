@@ -17,9 +17,9 @@ def list_devices(kind='input'):
     p.terminate()
     return items
 
-def check_gptsovits():
+def check_gptsovits(base_url="http://127.0.0.1:9880"):
     try:
-        requests.get('http://127.0.0.1:9880/tts?text=ping&text_lang=zh&ref_audio_path=none&prompt_lang=zh', timeout=2)
+        requests.get(f'{base_url}/tts?text=ping&text_lang=zh&ref_audio_path=none&prompt_lang=zh', timeout=2)
         return "✅ GPT-SoVITS"
     except:
         return "❌ GPT-SoVITS"
@@ -37,8 +37,8 @@ GOOGLE_VOICES = ['zh-CN-Wavenet-A','zh-CN-Wavenet-B','zh-CN-Wavenet-C','zh-CN-Wa
 
 # ── TTS ──────────────────────────────────────────────────
 
-def tts_gpt(text, ref_audio, prompt_lang, prompt_text, out_device):
-    url = 'http://127.0.0.1:9880/tts'
+def tts_gpt(text, ref_audio, prompt_lang, prompt_text, out_device, base_url="http://127.0.0.1:9880"):
+    url = f'{base_url}/tts'
     params = {
         'text': text, 'text_lang': 'zh',
         'ref_audio_path': ref_audio,
@@ -201,7 +201,7 @@ def main():
               sg.Radio('Cloud process (full audio)', 'GOOGLE_MODE', key='GM_CLOUD')]], key='COL_GM', visible=True))],
             [sg.Text('Input device:'), sg.Combo(in_devs, default_value=def_dev_in, key='DEV_IN', size=(50,1))],
             [sg.Text('Google key:'), sg.Input(key='GKEY', size=(50,1),
-                default_text='YOUR_GOOGLE_API_KEY', password_char='*')],
+                default_text='', password_char='*')],
         ])],
         [sg.Frame('TTS Engine', [
             [sg.Radio('GPT-SoVITS', 'TTS', key='TTS_GPT', default=True, enable_events=True),
@@ -210,7 +210,8 @@ def main():
             [sg.pin(sg.Col([[sg.Text('Ref audio:'), sg.Input(key='REF', size=(42,1),
                 default_text=os.path.join(os.path.dirname(__file__) or '.', 'ref_audio.wav')),
              sg.FileBrowse(file_types=(("WAV", "*.wav"),))]], key='COL_REF', visible=True))],
-            [sg.pin(sg.Col([[sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14,1)),
+            [sg.pin(sg.Col([[sg.Text('GPT URL:'), sg.Input('http://127.0.0.1:9880', key='GPT_URL', size=(35,1))],
+             [sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14,1)),
              sg.Button('■ GPT-SoVITS', key='GPT_STOP', size=(14,1), disabled=True, button_color='red'),
              sg.Text(check_gptsovits(), key='SRV', size=(16,1))]], key='COL_GPT', visible=True))],
             [sg.Combo(EDGE_VOICES, default_value='zh-CN-XiaoxiaoNeural', key='VOICE', size=(30,1))],
@@ -266,12 +267,11 @@ def main():
             threading.Thread(target=lambda: do_google(text, cfg), daemon=True).start()
         else:
             threading.Thread(target=lambda: do_edge(text, cfg), daemon=True).start()
-
     def do_gpt(text, cfg):
         if not os.path.exists(cfg['ref']):
             log("Ref audio missing!")
             return
-        log(tts_gpt(text, cfg['ref'], 'ja', '', cfg.get('dev_out')))
+        log(tts_gpt(text, cfg['ref'], 'ja', '', cfg.get('dev_out'), cfg.get('gpt_url', 'http://127.0.0.1:9880')))
 
     def do_edge(text, cfg):
         log(tts_edge(text, cfg['voice'], cfg.get('dev_out')))
@@ -290,8 +290,8 @@ def main():
         window.write_event_value('_STATUS', '⏹ Stopped')
 
 
-    def update_srv_status():
-        st = check_gptsovits()
+    def update_srv_status(gpt_url):
+        st = check_gptsovits(gpt_url)
         window['SRV'].update(st)
         return '✅' in st
 
@@ -319,7 +319,8 @@ def main():
 
         # Periodic server health check
         if event == '__TIMEOUT__':
-            now_running = update_srv_status()
+            gpt_url = values.get('GPT_URL', 'http://127.0.0.1:9880')
+            now_running = update_srv_status(gpt_url)
             window['GPT_START'].update(disabled=now_running)
             window['GPT_STOP'].update(disabled=not now_running)
             continue
@@ -345,7 +346,7 @@ def main():
                 log("GPT-SoVITS stopped")
             else:
                 log("GPT-SoVITS not running")
-            update_srv_status()
+            update_srv_status(values.get('GPT_URL', 'http://127.0.0.1:9880'))
 
         if event == 'START':
             gm = 'google_vad' if values.get('GM_VAD', True) else 'google_cloud'
@@ -356,10 +357,11 @@ def main():
                 'dev_in': int(values['DEV_IN'].split(':')[0]),
                 'dev_out': int(values['DEV_OUT'].split(':')[0]) if values['DEV_OUT'] else None,
                 'ref': values['REF'], 'gkey': values['GKEY'], 'voice': values['VOICE'],
+                'gpt_url': values.get('GPT_URL', 'http://127.0.0.1:9880'),
             }
-            if stt.startswith('google') and not cfg['gkey']:
+            if stt.startswith('google') and (not cfg['gkey'] or 'YOUR_' in cfg['gkey']):
                 sg.popup_error('Google API key required!'); continue
-            if tts == 'google' and not cfg['gkey']:
+            if tts == 'google' and (not cfg['gkey'] or 'YOUR_' in cfg['gkey']):
                 sg.popup_error('Google API key required!'); continue
             if tts == 'gpt' and not os.path.exists(cfg['ref']):
                 sg.popup_error('Ref audio not found!'); continue

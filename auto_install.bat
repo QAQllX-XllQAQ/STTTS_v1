@@ -85,4 +85,31 @@ echo.
 echo   Or use the GUI (python gui.py) and click
 echo   the "▶ GPT-SoVITS" button.
 echo ============================================
+
+echo.
+echo --- Installing torchaudio for Silero VAD ---
+if exist "venv\Scripts\pip.exe" (
+    venv\Scripts\pip install torchaudio --quiet
+) else (
+    pip install torchaudio --quiet
+)
+
+echo.
+echo --- Pre-downloading Whisper STT model (tiny) ---
+set PYTHON=python
+if exist "venv\Scripts\python.exe" set PYTHON=venv\Scripts\python.exe
+%PYTHON% -c "import faster_whisper" 2>nul
+if %errorlevel% neq 0 %PYTHON% -m pip install faster-whisper --quiet
+%PYTHON% -c "
+from faster_whisper import download_model
+import os
+model_dir = os.path.expanduser('~/.cache/faster-whisper/tiny')
+if not os.path.exists(model_dir):
+    print('Downloading faster-whisper tiny model (~150MB)...')
+    download_model('tiny')
+    print('Whisper model ready')
+else:
+    print('Whisper model already cached')
+" 2>&1 || echo Whisper model download skipped
+echo.
 pause

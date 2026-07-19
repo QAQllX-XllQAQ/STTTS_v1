@@ -5,3 +5,4 @@ webrtcvad-wheels>=2.0.14
 sounddevice>=0.5
 soundfile>=0.12
 edge-tts>=7.0
+torchaudio>=2.0
