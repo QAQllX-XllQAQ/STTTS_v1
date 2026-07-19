@@ -80,3 +80,23 @@ echo ""
 echo "  Or use the GUI (python3 gui.py) and click"
 echo '  the "▶ GPT-SoVITS" button.'
 echo "============================================"
+
+echo ""
+echo "--- Pre-downloading Whisper STT model (tiny) ---"
+PYTHON="python3"
+if [ -f "venv/bin/python3" ]; then
+    PYTHON="venv/bin/python3"
+fi
+$PYTHON -c "
+from faster_whisper import download_model
+import os
+model_dir = os.path.expanduser('~/.cache/faster-whisper/tiny')
+if not os.path.exists(model_dir):
+    print('Downloading faster-whisper tiny model (~150MB)...')
+    download_model('tiny')
+    print('Whisper model ready')
+else:
+    print('Whisper model already cached')
+" 2>&1 || echo "Whisper model download skipped (run 'pip install faster-whisper' first)"
+echo ""
+echo "All dependencies ready. Double-click 启动GUI.command to start."
