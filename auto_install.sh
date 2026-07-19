@@ -82,11 +82,20 @@ echo '  the "▶ GPT-SoVITS" button.'
 echo "============================================"
 
 echo ""
+echo "--- Installing torchaudio (Silero VAD dependency) ---"
+if [ -f "venv/bin/pip" ]; then
+    venv/bin/pip install torchaudio --quiet 2>&1 | tail -1
+else
+    pip install torchaudio --quiet 2>&1 | tail -1
+fi
+echo ""
 echo "--- Pre-downloading Whisper STT model (tiny) ---"
 PYTHON="python3"
 if [ -f "venv/bin/python3" ]; then
     PYTHON="venv/bin/python3"
 fi
+# Ensure faster-whisper available
+$PYTHON -c "import faster_whisper" 2>/dev/null || $PYTHON -m pip install faster-whisper --quiet
 $PYTHON -c "
 from faster_whisper import download_model
 import os
@@ -97,6 +106,5 @@ if not os.path.exists(model_dir):
     print('Whisper model ready')
 else:
     print('Whisper model already cached')
-" 2>&1 || echo "Whisper model download skipped (run 'pip install faster-whisper' first)"
+" 2>&1 || echo "Whisper model download skipped"
 echo ""
-echo "All dependencies ready. Double-click 启动GUI.command to start."
