@@ -582,6 +582,24 @@ def main():
 
 
 if __name__ == '__main__':
+    # Auto-elevate to admin if needed (required for global keyboard hooks)
+    import ctypes as _ct
+    try:
+        _is_admin = _ct.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        _is_admin = False
+    if not _is_admin:
+        _script = os.path.abspath(sys.argv[0])
+        _cwd = os.path.dirname(_script)
+        _pythonw = sys.executable.replace('python.exe', 'pythonw.exe')
+        if not os.path.exists(_pythonw):
+            _pythonw = sys.executable  # fallback
+        _ct.windll.shell32.ShellExecuteW(
+            None, "runas", _pythonw,
+            f'"{_script}"', _cwd, 0,
+        )
+        sys.exit(0)
+
     try:
         main()
     except Exception:

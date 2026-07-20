@@ -310,7 +310,7 @@ def stt_mimo(dev_idx, api_key, language, stop_event, on_text, log_fn):
         p.terminate()
 
 
-# ── Push-to-Talk (Win32 low-level keyboard hook) ────────
+# ── Push-to-Talk ─────────────────────────────────────────
 
 # Key name → VK code mapping
 _VK_MAP = {
@@ -334,9 +334,53 @@ for _c in _string.ascii_lowercase:
 for _c in _string.digits:
     _VK_MAP[_c] = ord(_c)
 
+# Win32 constants
+WM_HOTKEY = 0x0312
+MOD_NOREPEAT = 0x4000
+
+_user32 = ctypes.windll.user32
+_kernel32 = ctypes.windll.kernel32
+_GetAsyncKeyState = _user32.GetAsyncKeyState
+
+# Set proper argtypes to avoid overflow on 64-bit handles
+_user32.CreateWindowExW.argtypes = [
+    ctypes.wintypes.DWORD, ctypes.wintypes.LPCWSTR, ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ctypes.wintypes.HWND, ctypes.wintypes.HMENU, ctypes.wintypes.HINSTANCE, ctypes.c_void_p,
+]
+_user32.CreateWindowExW.restype = ctypes.wintypes.HWND
+_user32.RegisterClassW.argtypes = [ctypes.c_void_p]
+_user32.RegisterClassW.restype = ctypes.wintypes.ATOM
+_user32.RegisterHotKey.argtypes = [ctypes.wintypes.HWND, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
+_user32.RegisterHotKey.restype = ctypes.wintypes.BOOL
+_user32.UnregisterHotKey.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+_user32.UnregisterHotKey.restype = ctypes.wintypes.BOOL
+_user32.DestroyWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.DestroyWindow.restype = ctypes.wintypes.BOOL
+_user32.PeekMessageW.argtypes = [ctypes.c_void_p, ctypes.wintypes.HWND, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint]
+_user32.PeekMessageW.restype = ctypes.wintypes.BOOL
+_user32.DefWindowProcW.argtypes = [ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM]
+_user32.DefWindowProcW.restype = ctypes.wintypes.LPARAM
+
+WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
+
+class WNDCLASS(ctypes.Structure):
+    _fields_ = [
+        ('style', ctypes.c_uint),
+        ('lpfnWndProc', WNDPROC),
+        ('cbClsExtra', ctypes.c_int),
+        ('cbWndExtra', ctypes.c_int),
+        ('hInstance', ctypes.wintypes.HINSTANCE),
+        ('hIcon', ctypes.wintypes.HICON),
+        ('hCursor', ctypes.wintypes.HANDLE),
+        ('hbrBackground', ctypes.wintypes.HBRUSH),
+        ('lpszMenuName', ctypes.wintypes.LPCWSTR),
+        ('lpszClassName', ctypes.wintypes.LPCWSTR),
+    ]
+
 
 def resolve_vk(key_name):
-    """Resolve key name string to Win32 VK code. Raises ValueError."""
+    """Resolve key name string to VK code. Raises ValueError."""
     key_name = key_name.strip().lower()
     if key_name in _VK_MAP:
         return _VK_MAP[key_name]
@@ -349,9 +393,8 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
             stop_event, on_text, log_fn, set_status=None):
     """Push-to-Talk STT: hold rec_key to record, press play_key to replay.
 
-    Uses a Win32 low-level keyboard hook (WH_KEYBOARD_LL) with its own
-    message loop thread. This is the same mechanism used by Discord, OBS,
-    etc. for global hotkeys — works regardless of window focus.
+    Uses RegisterHotKey (same as Discord) for global hotkey detection.
+    No admin required, works regardless of window focus.
     """
     rec_key = rec_key.strip().lower()
     play_key = play_key.strip().lower()
@@ -363,89 +406,8 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
         log_fn(f"ERROR: {e}. Use names like 'f8', 'f9', 'space', 'a', etc.")
         return
 
-    # ── Hook state (shared between hook callback and recording loop) ──
-    key_state = {rec_vk: False, play_vk: False}
-    state_lock = threading.Lock()
-
-    # ── Win32 low-level keyboard hook ──────────────────────────────
-    user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-
-    WH_KEYBOARD_LL = 13
-    WM_KEYDOWN = 0x0100
-    WM_SYSKEYDOWN = 0x0104
-    WM_KEYUP = 0x0101
-    WM_SYSKEYUP = 0x0105
-
-    KBDLLHOOKSTRUCT = type('KBDLLHOOKSTRUCT', (ctypes.Structure,), {
-        '_fields_': [
-            ('vkCode', ctypes.wintypes.DWORD),
-            ('scanCode', ctypes.wintypes.DWORD),
-            ('flags', ctypes.wintypes.DWORD),
-            ('time', ctypes.wintypes.DWORD),
-            ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
-        ]
-    })
-
-    HOOKPROC = ctypes.CFUNCTYPE(
-        ctypes.c_long,
-        ctypes.c_int,
-        ctypes.wintypes.WPARAM,
-        ctypes.POINTER(KBDLLHOOKSTRUCT),
-    )
-
-    def _hook_proc(nCode, wParam, lParam):
-        if nCode >= 0:
-            vk = lParam.contents.vkCode
-            if vk in (rec_vk, play_vk):
-                with state_lock:
-                    if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                        key_state[vk] = True
-                    elif wParam in (WM_KEYUP, WM_SYSKEYUP):
-                        key_state[vk] = False
-        return user32.CallNextHookEx(None, nCode, wParam, lParam)
-
-    c_hook_proc = HOOKPROC(_hook_proc)
-    hook_handle = None
-    hook_thread_id = None
-    hook_ready = threading.Event()
-
-    def _hook_thread_func():
-        nonlocal hook_handle, hook_thread_id
-        hook_thread_id = kernel32.GetCurrentThreadId()
-        hook_handle = user32.SetWindowsHookExW(
-            WH_KEYBOARD_LL, c_hook_proc,
-            kernel32.GetModuleHandleW(None), 0,
-        )
-        if not hook_handle:
-            log_fn("ERROR: SetWindowsHookEx failed (need admin?)")
-            hook_ready.set()
-            return
-        hook_ready.set()
-        # Message loop — required for the hook to receive callbacks
-        msg = ctypes.wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        # Cleanup: unhook from this thread
-        if hook_handle:
-            user32.UnhookWindowsHookEx(hook_handle)
-            hook_handle = None
-
-    hook_thread = threading.Thread(target=_hook_thread_func, daemon=True)
-    hook_thread.start()
-    hook_ready.wait(timeout=5)
-
-    if not hook_handle:
-        log_fn("Failed to install keyboard hook. Try running as administrator.")
-        return
-
-    log_fn(f"PTT ready — hold [{rec_key}] to record, press [{play_key}] to replay")
-    if set_status:
-        set_status('🟢 PTT listening...')
-
-    # ── Audio stream ───────────────────────────────────────────────
     REC_RATE = 16000
+
     p = pyaudio.PyAudio()
     try:
         stream = p.open(
@@ -456,10 +418,9 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
     except Exception as e:
         log_fn(f"Failed to open audio stream: {e}")
         p.terminate()
-        _cleanup_hook(user32, hook_handle, hook_thread_id)
         return
 
-    # ── Whisper model ──────────────────────────────────────────────
+    # Whisper model loading
     whisper_model = None
     model_ready = (engine != 'whisper')
     if engine == 'whisper':
@@ -473,7 +434,10 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
         model_ready = True
         log_fn("Whisper model ready")
 
-    # ── Transcription ──────────────────────────────────────────────
+    log_fn(f"PTT ready — hold [{rec_key}] to record, press [{play_key}] to replay")
+    if set_status:
+        set_status('🟢 PTT listening...')
+
     def transcribe_audio(audio_bytes):
         if engine == 'whisper':
             audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -536,68 +500,119 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
                 pass
         return ""
 
-    # ── Main recording loop ────────────────────────────────────────
+    # ── RegisterHotKey + message loop (Discord-style) ──────────
+
+    # Create an invisible message-only window
+    _def_proc = WNDPROC(lambda h, m, w, l: _user32.DefWindowProcW(h, m, w, l))
+    wc = WNDCLASS()
+    wc.lpfnWndProc = _def_proc
+    wc.lpszClassName = 'STTTS_PTT_Hotkey'
+    wc.hInstance = _kernel32.GetModuleHandleW(None)
+    atom = _user32.RegisterClassW(ctypes.byref(wc))
+    reg_err = _kernel32.GetLastError()
+    log_fn(f"[debug] RegisterClassW atom={atom} err={reg_err}")
+    hwnd = _user32.CreateWindowExW(
+        0, 'STTTS_PTT_Hotkey', 'STTTS Hotkey', 0, 0, 0, 0, 0,
+        0, 0, wc.hInstance, 0,
+    )
+    wnd_err = _kernel32.GetLastError()
+    log_fn(f"[debug] CreateWindowExW hwnd={hwnd} err={wnd_err}")
+    if not hwnd:
+        log_fn(f"ERROR: Failed to create hotkey window (class_err={reg_err}, wnd_err={wnd_err})")
+        stream.stop_stream(); stream.close(); p.terminate()
+        return
+
+    # Register global hotkeys — with all modifier combos so they work
+    # even when Shift/Ctrl/Alt are held (e.g. in-game)
+    MODIFIERS = [0, 0x0001, 0x0002, 0x0004, 0x0003, 0x0005, 0x0006, 0x0007]  # none,Alt,Ctrl,Ctrl+Alt,Shift+Ctrl,Shift+Alt,Shift+Ctrl+Alt,Shift
+    rec_ids = []
+    play_ids = []
+    next_id = 10
+
+    for mod in MODIFIERS:
+        rid = next_id; next_id += 1
+        if _user32.RegisterHotKey(hwnd, rid, mod | MOD_NOREPEAT, rec_vk):
+            rec_ids.append(rid)
+        pid = next_id; next_id += 1
+        if _user32.RegisterHotKey(hwnd, pid, mod | MOD_NOREPEAT, play_vk):
+            play_ids.append(pid)
+
+    if not rec_ids:
+        log_fn(f"ERROR: Failed to register any hotkey for [{rec_key}]")
+        _user32.DestroyWindow(hwnd)
+        stream.stop_stream(); stream.close(); p.terminate()
+        return
+
+    log_fn(f"Hotkeys registered: [{rec_key}] record ({len(rec_ids)} combos), [{play_key}] replay ({len(play_ids)} combos)")
+
+    # Message loop in a background thread
+    msg = ctypes.wintypes.MSG()
     last_text = ""
-    play_was_down = False
     recording = False
     audio_frames = []
+    hotkey_thread_id = _kernel32.GetCurrentThreadId()
+
+    def _is_key_held(vk):
+        return (_GetAsyncKeyState(vk) & 0x8000) != 0
 
     try:
         while not stop_event.is_set():
-            with state_lock:
-                rec_down = key_state[rec_vk]
-                play_down = key_state[play_vk]
+            # GetMessageW blocks until a message arrives or timeout
+            has_msg = _user32.PeekMessageW(ctypes.byref(msg), hwnd, 0, 0, 1)  # PM_REMOVE
+            if has_msg:
+                if msg.message == WM_HOTKEY:
+                    if msg.wParam in rec_ids:
+                        # Rec key pressed — start recording
+                        recording = True
+                        audio_frames = []
+                        log_fn("🔴 Recording...")
+                        if set_status:
+                            set_status('🔴 Recording...')
 
-            if rec_down:
-                if not recording:
-                    recording = True
-                    audio_frames = []
-                    log_fn("🔴 Recording...")
-                    if set_status:
-                        set_status('🔴 Recording...')
-                try:
-                    data = stream.read(512, exception_on_overflow=False)
-                    audio_frames.append(data)
-                except Exception:
-                    pass
+                        # Record while key is held
+                        while _is_key_held(rec_vk) and not stop_event.is_set():
+                            try:
+                                data = stream.read(512, exception_on_overflow=False)
+                                audio_frames.append(data)
+                            except Exception:
+                                pass
+
+                        # Key released — transcribe
+                        recording = False
+                        log_fn("⏹ Stopped, transcribing...")
+                        if set_status:
+                            set_status('⏳ Transcribing...')
+                        if audio_frames and model_ready:
+                            text = transcribe_audio(b''.join(audio_frames))
+                            if text and not stop_event.is_set():
+                                last_text = text
+                                on_text(text)
+                        audio_frames = []
+                        if set_status:
+                            set_status('🟢 PTT listening...')
+
+                    elif msg.wParam in play_ids:
+                        # Play key pressed — replay last text
+                        if last_text and not stop_event.is_set():
+                            log_fn(f"▶ Replaying: {last_text}")
+                            on_text(last_text)
+
+                    _user32.TranslateMessage(ctypes.byref(msg))
+                    _user32.DispatchMessageW(ctypes.byref(msg))
             else:
-                if recording:
-                    recording = False
-                    log_fn("⏹ Stopped, transcribing...")
-                    if set_status:
-                        set_status('⏳ Transcribing...')
-                    if audio_frames and model_ready:
-                        text = transcribe_audio(b''.join(audio_frames))
-                        if text and not stop_event.is_set():
-                            last_text = text
-                            on_text(text)
-                    audio_frames = []
-                    if set_status:
-                        set_status('🟢 PTT listening...')
-                else:
-                    import time
-                    time.sleep(0.01)
-
-            # Play key: trigger on press edge
-            if play_down and not play_was_down:
-                play_was_down = True
-                if last_text and not stop_event.is_set():
-                    log_fn(f"▶ Replaying: {last_text}")
-                    on_text(last_text)
-            elif not play_down:
-                play_was_down = False
+                # No message — sleep briefly to avoid busy-waiting
+                import time
+                time.sleep(0.02)
 
     finally:
+        for rid in rec_ids:
+            _user32.UnregisterHotKey(hwnd, rid)
+        for pid in play_ids:
+            _user32.UnregisterHotKey(hwnd, pid)
+        _user32.DestroyWindow(hwnd)
         stream.stop_stream()
         stream.close()
         p.terminate()
-        _cleanup_hook(user32, hook_handle, hook_thread_id)
-
-
-def _cleanup_hook(user32, hook_handle, hook_thread_id):
-    """Post WM_QUIT to the hook thread so it unhook and exits."""
-    if hook_thread_id:
-        user32.PostThreadMessageW(hook_thread_id, 0x0012, 0, 0)  # WM_QUIT
 
 
 # ── Helpers ──────────────────────────────────────────────

@@ -1,2 +1,9 @@
 @echo off
-start /wait powershell -ExecutionPolicy Bypass -File "%~dp0启动GUI.ps1"
+title STTTS GUI
+cd /d "%~dp0"
+python gui.py
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Python script crashed with code %errorlevel%
+)
+pause

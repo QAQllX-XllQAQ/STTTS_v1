@@ -15,3 +15,4 @@ Thumbs.db
 
 # Local config (contains API keys)
 config.json
+*.lnk
