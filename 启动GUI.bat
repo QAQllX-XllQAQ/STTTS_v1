@@ -2,13 +2,13 @@
 title STTTS GUI
 cd /d "%~dp0"
 echo Running STTTS GUI...
-"C:\ProgramData\miniconda3\python.exe" gui.py 2>gui_error.log
+set LOGFILE=%TEMP%\sttts_gui_error.log
+python gui.py 2>"%LOGFILE%"
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Python script crashed with code %errorlevel%
-    echo Check gui_error.log for details.
-    type gui_error.log
+    echo Check %LOGFILE% for details.
+    type "%LOGFILE%"
 ) else (
     echo [OK] Exited normally
 )
-pause

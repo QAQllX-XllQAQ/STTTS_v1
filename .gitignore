@@ -17,3 +17,6 @@ test_*.wav
 # OS
 Thumbs.db
 .DS_Store
+
+# Local config (contains API keys)
+config.json

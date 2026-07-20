@@ -33,7 +33,8 @@ if __name__ == '__main__':
             sys.exit(1)
             
     try:
-                HAS_KEYBOARD = True
+        import keyboard
+        HAS_KEYBOARD = True
     except ImportError:
         HAS_KEYBOARD = False
     #import pyperclip
@@ -397,24 +398,6 @@ if __name__ == '__main__':
             # Microphone is muted; nothing to reset
             console.print("[bold yellow]Microphone is muted. Nothing to reset.[/bold yellow]")
 
-    # Hotkey Callback Functions
-    # 新版 RealtimeSTT 不支持运行时开关麦克风，以下函数仅作提示
-    def mute_microphone():
-        console.print("[bold yellow]Mute not supported in this RealtimeSTT version[/bold yellow]")
-
-    def unmute_microphone():
-        console.print("[bold yellow]Unmute not supported in this RealtimeSTT version[/bold yellow]")
-
-    def start_static_recording():
-        console.print("[bold yellow]Static recording not supported in this RealtimeSTT version[/bold yellow]")
-
-    def stop_static_recording():
-        console.print("[bold yellow]Static recording not supported in this RealtimeSTT version[/bold yellow]")
-
-    def reset_transcription():
-        global full_sentences
-        full_sentences.clear()
-        console.print("[bold magenta]Transcription reset.[/bold magenta]")
 
     import tempfile as _tempfile
     def gptsovits_tts(text):
@@ -424,8 +407,7 @@ if __name__ == '__main__':
             url = 'http://127.0.0.1:9880/tts'
             params = {
                 'text': text, 'text_lang': 'zh',
-                'ref_audio_path': r"I:\STTTS\GPT-SoVITS_Mortis_Mutsumi_0104等3个文件\GPT-SoVITS_Mortis_Mutsumi_0104\model_Mutsumi_beta_0103\model_Mutsumi_beta_0103\サキ、ムシカが壊れたらサキも.wav",
-                'prompt_lang': 'ja', 'prompt_text': '',
+                'ref_audio_path': os.path.join(os.path.dirname(__file__) or '.', 'ref_audio.wav'),
                 'text_split_method': 'cut5', 'batch_size': 1,
                 'media_type': 'wav', 'streaming_mode': False
             }

@@ -31,7 +31,7 @@ from typing import List, Union
 import faster_whisper
 import collections
 import numpy as np
-import pvporcupine
+
 import traceback
 import threading
 import webrtcvad
@@ -420,6 +420,13 @@ class AudioToTextRecorder:
 
         # Setup wake word detection
         if wake_words:
+
+            try:
+                import pvporcupine
+            except ImportError:
+                logging.error("pvporcupine is required for wake word detection. "
+                              "Install with: pip install pvporcupine")
+                raise
 
             self.wake_words_list = [
                 word.strip() for word in wake_words.lower().split(',')
@@ -993,7 +1000,10 @@ class AudioToTextRecorder:
 
                 try:
 
-                    data = self.audio_queue.get()
+                    try:
+                        data = self.audio_queue.get(timeout=0.5)
+                    except:
+                        continue
 
                     # Handle queue overflow
                     queue_overflow_logged = False
@@ -1142,7 +1152,7 @@ class AudioToTextRecorder:
                     self.stop_recording_on_voice_deactivity = False
 
                 if time.time() - self.silero_check_time > 0.1:
-                    self.silero_check_time = 0
+                    self.silero_check_time = time.time()
 
                 # Handle wake word timeout (waited to long initiating
                 # speech after wake word detection)

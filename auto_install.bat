@@ -87,12 +87,8 @@ echo   the "▶ GPT-SoVITS" button.
 echo ============================================
 
 echo.
-echo --- Installing torchaudio for Silero VAD ---
-if exist "venv\Scripts\pip.exe" (
-    venv\Scripts\pip install torchaudio --quiet
-) else (
-    pip install torchaudio --quiet
-)
+echo --- Installing torchaudio for Silero VAD (into GPTSoVits conda env) ---
+conda run -n GPTSoVits pip install torchaudio --quiet
 
 echo.
 echo --- Pre-downloading Whisper STT model (tiny) ---
