@@ -536,23 +536,11 @@ def main():
                 # Validate PTT keys
                 if cfg.get('stt') == 'ptt':
                     try:
-                        _VK_NAMES = {
-                            'f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11','f12',
-                            'space','enter','return','tab','shift','ctrl','alt','win',
-                            'lshift','rshift','lctrl','rctrl','lalt','ralt',
-                            'esc','escape','backspace','delete','insert',
-                            'home','end','pageup','pagedown','up','down','left','right',
-                            'capslock','numlock','scrolllock','printscreen','pause',
-                        }
-                        import string as _str
-                        _VK_NAMES.update(set(_str.ascii_lowercase))
-                        _VK_NAMES.update(set(_str.digits))
+                        from sttts.stt import resolve_vk as _rvk
                         for _k, _label in [(cfg.get('ptt_rec', ''), 'Record'),
                                            (cfg.get('ptt_play', ''), 'Play')]:
-                            _kn = _k.strip().lower()
-                            if _kn not in _VK_NAMES and len(_kn) != 1:
-                                raise ValueError(_kn)
-                    except (ValueError, KeyError):
+                            _rvk(_k)
+                    except ValueError:
                         window['STATUS'].update(f'❌ Invalid PTT key: "{_k}"', text_color='red')
                         log(f'ERROR: {_label} key "{_k}" is not a valid key name. '
                             f'Use names like "f8", "f9", "space", "a", etc.')

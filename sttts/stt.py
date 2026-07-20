@@ -3,6 +3,7 @@
 import base64
 import collections
 import ctypes
+import ctypes.wintypes
 import json
 import threading
 
@@ -309,67 +310,142 @@ def stt_mimo(dev_idx, api_key, language, stop_event, on_text, log_fn):
         p.terminate()
 
 
-# ── Push-to-Talk ─────────────────────────────────────────
+# ── Push-to-Talk (Win32 low-level keyboard hook) ────────
+
+# Key name → VK code mapping
+_VK_MAP = {
+    'f1': 0x70, 'f2': 0x71, 'f3': 0x72, 'f4': 0x73, 'f5': 0x74,
+    'f6': 0x75, 'f7': 0x76, 'f8': 0x77, 'f9': 0x78, 'f10': 0x79,
+    'f11': 0x7A, 'f12': 0x7B,
+    'space': 0x20, 'enter': 0x0D, 'return': 0x0D, 'tab': 0x09,
+    'shift': 0xA0, 'ctrl': 0xA2, 'alt': 0xA4, 'win': 0x5B,
+    'lshift': 0xA0, 'rshift': 0xA1, 'lctrl': 0xA2, 'rctrl': 0xA3,
+    'lalt': 0xA4, 'ralt': 0xA5,
+    'esc': 0x1B, 'escape': 0x1B,
+    'backspace': 0x08, 'delete': 0x2E, 'insert': 0x2D,
+    'home': 0x24, 'end': 0x23, 'pageup': 0x21, 'pagedown': 0x22,
+    'up': 0x26, 'down': 0x28, 'left': 0x25, 'right': 0x27,
+    'capslock': 0x14, 'numlock': 0x90, 'scrolllock': 0x91,
+    'printscreen': 0x2C, 'pause': 0x13,
+}
+import string as _string
+for _c in _string.ascii_lowercase:
+    _VK_MAP[_c] = ord(_c.upper())
+for _c in _string.digits:
+    _VK_MAP[_c] = ord(_c)
+
+
+def resolve_vk(key_name):
+    """Resolve key name string to Win32 VK code. Raises ValueError."""
+    key_name = key_name.strip().lower()
+    if key_name in _VK_MAP:
+        return _VK_MAP[key_name]
+    if len(key_name) == 1:
+        return ord(key_name.upper())
+    raise ValueError(f"Unknown key: '{key_name}'")
+
 
 def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
             stop_event, on_text, log_fn, set_status=None):
     """Push-to-Talk STT: hold rec_key to record, press play_key to replay.
 
-    Uses Win32 GetAsyncKeyState for key detection — works globally
-    regardless of window focus, no hooks or message loops needed.
+    Uses a Win32 low-level keyboard hook (WH_KEYBOARD_LL) with its own
+    message loop thread. This is the same mechanism used by Discord, OBS,
+    etc. for global hotkeys — works regardless of window focus.
     """
-    import string as _string
-
     rec_key = rec_key.strip().lower()
     play_key = play_key.strip().lower()
 
-    # Map key names to Win32 Virtual-Key codes
-    VK_MAP = {
-        'f1': 0x70, 'f2': 0x71, 'f3': 0x72, 'f4': 0x73, 'f5': 0x74,
-        'f6': 0x75, 'f7': 0x76, 'f8': 0x77, 'f9': 0x78, 'f10': 0x79,
-        'f11': 0x7A, 'f12': 0x7B,
-        'space': 0x20, 'enter': 0x0D, 'return': 0x0D, 'tab': 0x09,
-        'shift': 0xA0, 'ctrl': 0xA2, 'alt': 0xA4, 'win': 0x5B,
-        'lshift': 0xA0, 'rshift': 0xA1, 'lctrl': 0xA2, 'rctrl': 0xA3,
-        'lalt': 0xA4, 'ralt': 0xA5,
-        'esc': 0x1B, 'escape': 0x1B,
-        'backspace': 0x08, 'delete': 0x2E, 'insert': 0x2D,
-        'home': 0x24, 'end': 0x23, 'pageup': 0x21, 'pagedown': 0x22,
-        'up': 0x26, 'down': 0x28, 'left': 0x25, 'right': 0x27,
-        'capslock': 0x14, 'numlock': 0x90, 'scrolllock': 0x91,
-        'printscreen': 0x2C, 'pause': 0x13,
-        'numpad0': 0x60, 'numpad1': 0x61, 'numpad2': 0x62, 'numpad3': 0x63,
-        'numpad4': 0x64, 'numpad5': 0x65, 'numpad6': 0x66, 'numpad7': 0x67,
-        'numpad8': 0x68, 'numpad9': 0x69,
-        'multiply': 0x6A, 'add': 0x6B, 'subtract': 0x6D,
-        'decimal': 0x6E, 'divide': 0x6F,
-    }
-    for c in _string.ascii_lowercase:
-        VK_MAP[c] = ord(c.upper())
-    for c in _string.digits:
-        VK_MAP[c] = ord(c)
-
-    def _resolve_vk(key_name):
-        if key_name in VK_MAP:
-            return VK_MAP[key_name]
-        if len(key_name) == 1:
-            return ord(key_name.upper())
-        raise ValueError(f"Unknown key: '{key_name}'")
-
     try:
-        rec_vk = _resolve_vk(rec_key)
-        play_vk = _resolve_vk(play_key)
+        rec_vk = resolve_vk(rec_key)
+        play_vk = resolve_vk(play_key)
     except ValueError as e:
         log_fn(f"ERROR: {e}. Use names like 'f8', 'f9', 'space', 'a', etc.")
         return
 
-    _GetAsyncKeyState = ctypes.windll.user32.GetAsyncKeyState
+    # ── Hook state (shared between hook callback and recording loop) ──
+    key_state = {rec_vk: False, play_vk: False}
+    state_lock = threading.Lock()
 
-    def is_key_down(vk):
-        return (_GetAsyncKeyState(vk) & 0x8000) != 0
+    # ── Win32 low-level keyboard hook ──────────────────────────────
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
 
+    WH_KEYBOARD_LL = 13
+    WM_KEYDOWN = 0x0100
+    WM_SYSKEYDOWN = 0x0104
+    WM_KEYUP = 0x0101
+    WM_SYSKEYUP = 0x0105
+
+    KBDLLHOOKSTRUCT = type('KBDLLHOOKSTRUCT', (ctypes.Structure,), {
+        '_fields_': [
+            ('vkCode', ctypes.wintypes.DWORD),
+            ('scanCode', ctypes.wintypes.DWORD),
+            ('flags', ctypes.wintypes.DWORD),
+            ('time', ctypes.wintypes.DWORD),
+            ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
+        ]
+    })
+
+    HOOKPROC = ctypes.CFUNCTYPE(
+        ctypes.c_long,
+        ctypes.c_int,
+        ctypes.wintypes.WPARAM,
+        ctypes.POINTER(KBDLLHOOKSTRUCT),
+    )
+
+    def _hook_proc(nCode, wParam, lParam):
+        if nCode >= 0:
+            vk = lParam.contents.vkCode
+            if vk in (rec_vk, play_vk):
+                with state_lock:
+                    if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        key_state[vk] = True
+                    elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                        key_state[vk] = False
+        return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    c_hook_proc = HOOKPROC(_hook_proc)
+    hook_handle = None
+    hook_thread_id = None
+    hook_ready = threading.Event()
+
+    def _hook_thread_func():
+        nonlocal hook_handle, hook_thread_id
+        hook_thread_id = kernel32.GetCurrentThreadId()
+        hook_handle = user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL, c_hook_proc,
+            kernel32.GetModuleHandleW(None), 0,
+        )
+        if not hook_handle:
+            log_fn("ERROR: SetWindowsHookEx failed (need admin?)")
+            hook_ready.set()
+            return
+        hook_ready.set()
+        # Message loop — required for the hook to receive callbacks
+        msg = ctypes.wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+        # Cleanup: unhook from this thread
+        if hook_handle:
+            user32.UnhookWindowsHookEx(hook_handle)
+            hook_handle = None
+
+    hook_thread = threading.Thread(target=_hook_thread_func, daemon=True)
+    hook_thread.start()
+    hook_ready.wait(timeout=5)
+
+    if not hook_handle:
+        log_fn("Failed to install keyboard hook. Try running as administrator.")
+        return
+
+    log_fn(f"PTT ready — hold [{rec_key}] to record, press [{play_key}] to replay")
+    if set_status:
+        set_status('🟢 PTT listening...')
+
+    # ── Audio stream ───────────────────────────────────────────────
     REC_RATE = 16000
-
     p = pyaudio.PyAudio()
     try:
         stream = p.open(
@@ -380,9 +456,10 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
     except Exception as e:
         log_fn(f"Failed to open audio stream: {e}")
         p.terminate()
+        _cleanup_hook(user32, hook_handle, hook_thread_id)
         return
 
-    # Whisper model loading
+    # ── Whisper model ──────────────────────────────────────────────
     whisper_model = None
     model_ready = (engine != 'whisper')
     if engine == 'whisper':
@@ -396,10 +473,7 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
         model_ready = True
         log_fn("Whisper model ready")
 
-    log_fn(f"PTT ready — hold [{rec_key}] to record, press [{play_key}] to replay")
-    if set_status:
-        set_status('🟢 PTT listening...')
-
+    # ── Transcription ──────────────────────────────────────────────
     def transcribe_audio(audio_bytes):
         if engine == 'whisper':
             audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -462,6 +536,7 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
                 pass
         return ""
 
+    # ── Main recording loop ────────────────────────────────────────
     last_text = ""
     play_was_down = False
     recording = False
@@ -469,8 +544,9 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
 
     try:
         while not stop_event.is_set():
-            rec_down = is_key_down(rec_vk)
-            play_down = is_key_down(play_vk)
+            with state_lock:
+                rec_down = key_state[rec_vk]
+                play_down = key_state[play_vk]
 
             if rec_down:
                 if not recording:
@@ -515,6 +591,13 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
         stream.stop_stream()
         stream.close()
         p.terminate()
+        _cleanup_hook(user32, hook_handle, hook_thread_id)
+
+
+def _cleanup_hook(user32, hook_handle, hook_thread_id):
+    """Post WM_QUIT to the hook thread so it unhook and exits."""
+    if hook_thread_id:
+        user32.PostThreadMessageW(hook_thread_id, 0x0012, 0, 0)  # WM_QUIT
 
 
 # ── Helpers ──────────────────────────────────────────────
