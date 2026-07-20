@@ -1,10 +1,18 @@
 @echo off
+REM ── Self-elevate to admin ──
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Requesting administrator privileges...
+    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs -WorkingDirectory '%~dp0'"
+    exit /b
+)
+
 chcp 65001 >nul
 title STTTS - Install GPT-SoVITS
 cd /d "%~dp0"
 
 echo ============================================
-echo   STTTS - GPT-SoVITS 自动安装脚本
+echo   STTTS - GPT-SoVITS 自动安装脚本 (管理员)
 echo ============================================
 echo.
 
