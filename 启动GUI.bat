@@ -1,2 +1,2 @@
 @echo off
-powershell -ExecutionPolicy Bypass -File "%~dp0启动GUI.ps1"
+start /wait powershell -ExecutionPolicy Bypass -File "%~dp0启动GUI.ps1"
