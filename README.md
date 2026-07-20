@@ -18,6 +18,13 @@ python STTTS.py --stt whisper --tts edge
 python STTTS.py --help
 ```
 
+## 推荐使用 Push-to-Talk 模式
+
+> **推荐使用 PTT 模式**，按住按键录音、松开即识别。响应快、误触少。
+>
+> Continuous（VAD）模式当前优化不足：语音活动检测灵敏度调参困难，容易漏句或误触发，
+> 且 Whisper 实时转录在长句场景下延迟较高。后续版本会改进。
+
 ## 功能
 
 | 功能 | 选项 |
@@ -25,7 +32,7 @@ python STTTS.py --help
 | **STT** | Whisper（本地 GPU）/ Google Cloud STT（本地VAD / 全云端）/ Xiaomi MiMo |
 | **TTS** | GPT-SoVITS / Edge-TTS / Google TTS |
 | **音频输出** | 任意输出设备（耳机、扬声器、Voicemeeter 等） |
-| **模式** | Continuous (VAD) / Push-to-Talk |
+| **模式** | **Push-to-Talk（推荐）** / Continuous (VAD) |
 | **GPT-SoVITS** | GUI 内一键启动/停止 |
 
 ## 安装 GPT-SoVITS（可选）
