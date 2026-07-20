@@ -2,6 +2,7 @@
 
 import base64
 import collections
+import ctypes
 import json
 import threading
 
@@ -16,15 +17,7 @@ from .audio import pcm_to_wav
 # ── Whisper (RealtimeSTT) ────────────────────────────────
 
 def stt_whisper(dev_idx, stop_event, on_text, log_fn, model='small'):
-    """Continuous STT using RealtimeSTT (Whisper-based).
-
-    Args:
-        dev_idx: Input device index.
-        stop_event: threading.Event to signal stop.
-        on_text: Callback receiving recognized text.
-        log_fn: Logging callback.
-        model: Whisper model name.
-    """
+    """Continuous STT using RealtimeSTT (Whisper-based)."""
     from RealtimeSTT import AudioToTextRecorder
 
     log_fn(f"Loading Whisper STT (model={model})...")
@@ -57,11 +50,7 @@ def stt_whisper(dev_idx, stop_event, on_text, log_fn, model='small'):
 # ── Google Cloud STT (local VAD) ─────────────────────────
 
 def stt_google_vad(dev_idx, api_key, stop_event, on_text, log_fn, model='default'):
-    """Local VAD + Google Cloud REST API.
-
-    Uses webrtcvad to detect speech segments, then sends only speech
-    to Google for transcription. More efficient than cloud-only mode.
-    """
+    """Local VAD + Google Cloud REST API."""
     RATE, CHUNK, VAD_MODE = 16000, 480, 1
 
     p = pyaudio.PyAudio()
@@ -326,26 +315,58 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
             stop_event, on_text, log_fn, set_status=None):
     """Push-to-Talk STT: hold rec_key to record, press play_key to replay.
 
-    Uses event-based keyboard hooks (not polling) so it works reliably
-    even when the GUI window is not focused, including during games.
+    Uses Win32 GetAsyncKeyState for key detection — works globally
+    regardless of window focus, no hooks or message loops needed.
     """
-    try:
-        import keyboard
-    except ImportError:
-        log_fn("ERROR: keyboard library required for PTT. Run: pip install keyboard")
-        return
+    import string as _string
 
     rec_key = rec_key.strip().lower()
     play_key = play_key.strip().lower()
 
-    # Validate key names
-    for key_name, key_label in [(rec_key, 'Record'), (play_key, 'Play')]:
-        try:
-            keyboard.parse_hotkey(key_name)
-        except (ValueError, KeyError):
-            log_fn(f"ERROR: {key_label} key '{key_name}' is not a valid key name. "
-                   f"Use names like 'f8', 'f9', 'space', 'ctrl', etc.")
-            return
+    # Map key names to Win32 Virtual-Key codes
+    VK_MAP = {
+        'f1': 0x70, 'f2': 0x71, 'f3': 0x72, 'f4': 0x73, 'f5': 0x74,
+        'f6': 0x75, 'f7': 0x76, 'f8': 0x77, 'f9': 0x78, 'f10': 0x79,
+        'f11': 0x7A, 'f12': 0x7B,
+        'space': 0x20, 'enter': 0x0D, 'return': 0x0D, 'tab': 0x09,
+        'shift': 0xA0, 'ctrl': 0xA2, 'alt': 0xA4, 'win': 0x5B,
+        'lshift': 0xA0, 'rshift': 0xA1, 'lctrl': 0xA2, 'rctrl': 0xA3,
+        'lalt': 0xA4, 'ralt': 0xA5,
+        'esc': 0x1B, 'escape': 0x1B,
+        'backspace': 0x08, 'delete': 0x2E, 'insert': 0x2D,
+        'home': 0x24, 'end': 0x23, 'pageup': 0x21, 'pagedown': 0x22,
+        'up': 0x26, 'down': 0x28, 'left': 0x25, 'right': 0x27,
+        'capslock': 0x14, 'numlock': 0x90, 'scrolllock': 0x91,
+        'printscreen': 0x2C, 'pause': 0x13,
+        'numpad0': 0x60, 'numpad1': 0x61, 'numpad2': 0x62, 'numpad3': 0x63,
+        'numpad4': 0x64, 'numpad5': 0x65, 'numpad6': 0x66, 'numpad7': 0x67,
+        'numpad8': 0x68, 'numpad9': 0x69,
+        'multiply': 0x6A, 'add': 0x6B, 'subtract': 0x6D,
+        'decimal': 0x6E, 'divide': 0x6F,
+    }
+    for c in _string.ascii_lowercase:
+        VK_MAP[c] = ord(c.upper())
+    for c in _string.digits:
+        VK_MAP[c] = ord(c)
+
+    def _resolve_vk(key_name):
+        if key_name in VK_MAP:
+            return VK_MAP[key_name]
+        if len(key_name) == 1:
+            return ord(key_name.upper())
+        raise ValueError(f"Unknown key: '{key_name}'")
+
+    try:
+        rec_vk = _resolve_vk(rec_key)
+        play_vk = _resolve_vk(play_key)
+    except ValueError as e:
+        log_fn(f"ERROR: {e}. Use names like 'f8', 'f9', 'space', 'a', etc.")
+        return
+
+    _GetAsyncKeyState = ctypes.windll.user32.GetAsyncKeyState
+
+    def is_key_down(vk):
+        return (_GetAsyncKeyState(vk) & 0x8000) != 0
 
     REC_RATE = 16000
 
@@ -361,10 +382,6 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
         p.terminate()
         return
 
-    # State shared between keyboard callbacks and recording loop
-    rec_pressed = threading.Event()    # held while rec_key is down
-    play_triggered = threading.Event() # pulsed on each play_key press
-
     # Whisper model loading
     whisper_model = None
     model_ready = (engine != 'whisper')
@@ -378,13 +395,6 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
             whisper_model = WhisperModel(model_name, device='cpu', compute_type='int8')
         model_ready = True
         log_fn("Whisper model ready")
-
-    # Register global keyboard hooks — fire even when unfocused
-    hooks = [
-        keyboard.on_press_key(rec_key, lambda e: rec_pressed.set(), suppress=False),
-        keyboard.on_release_key(rec_key, lambda e: rec_pressed.clear(), suppress=False),
-        keyboard.on_press_key(play_key, lambda e: play_triggered.set(), suppress=False),
-    ]
 
     log_fn(f"PTT ready — hold [{rec_key}] to record, press [{play_key}] to replay")
     if set_status:
@@ -453,60 +463,55 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
         return ""
 
     last_text = ""
+    play_was_down = False
+    recording = False
+    audio_frames = []
 
     try:
         while not stop_event.is_set():
-            # Block until rec_key pressed or timeout (check play_key too)
-            rec_pressed.wait(timeout=0.1)
-            if stop_event.is_set():
-                break
+            rec_down = is_key_down(rec_vk)
+            play_down = is_key_down(play_vk)
 
-            # Handle play_key replay
-            if play_triggered.is_set():
-                play_triggered.clear()
-                if last_text and not stop_event.is_set():
-                    log_fn(f"▶ Replaying: {last_text}")
-                    on_text(last_text)
-
-            if not rec_pressed.is_set():
-                continue
-
-            # Recording phase: collect audio while rec_key is held
-            audio_frames = []
-            log_fn("🔴 Recording...")
-            if set_status:
-                set_status('🔴 Recording...')
-
-            while rec_pressed.is_set() and not stop_event.is_set():
+            if rec_down:
+                if not recording:
+                    recording = True
+                    audio_frames = []
+                    log_fn("🔴 Recording...")
+                    if set_status:
+                        set_status('🔴 Recording...')
                 try:
                     data = stream.read(512, exception_on_overflow=False)
                     audio_frames.append(data)
                 except Exception:
-                    continue
+                    pass
+            else:
+                if recording:
+                    recording = False
+                    log_fn("⏹ Stopped, transcribing...")
+                    if set_status:
+                        set_status('⏳ Transcribing...')
+                    if audio_frames and model_ready:
+                        text = transcribe_audio(b''.join(audio_frames))
+                        if text and not stop_event.is_set():
+                            last_text = text
+                            on_text(text)
+                    audio_frames = []
+                    if set_status:
+                        set_status('🟢 PTT listening...')
+                else:
+                    import time
+                    time.sleep(0.01)
 
-            if stop_event.is_set():
-                break
-
-            # Transcription phase
-            log_fn("⏹ Stopped, transcribing...")
-            if set_status:
-                set_status('⏳ Transcribing...')
-
-            if audio_frames and model_ready:
-                text = transcribe_audio(b''.join(audio_frames))
-                if text and not stop_event.is_set():
-                    last_text = text
-                    on_text(text)
-
-            if set_status:
-                set_status('🟢 PTT listening...')
+            # Play key: trigger on press edge
+            if play_down and not play_was_down:
+                play_was_down = True
+                if last_text and not stop_event.is_set():
+                    log_fn(f"▶ Replaying: {last_text}")
+                    on_text(last_text)
+            elif not play_down:
+                play_was_down = False
 
     finally:
-        for hook in hooks:
-            try:
-                keyboard.unhook(hook)
-            except Exception:
-                pass
         stream.stop_stream()
         stream.close()
         p.terminate()
@@ -517,5 +522,3 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
 def _b64encode(data):
     """Base64 encode bytes to string."""
     return base64.b64encode(data).decode()
-
-
