@@ -94,6 +94,70 @@ class GPTSoVITSManager:
         self.process = None
 
 
+
+
+# --- GPT-SoVITS Model Management ---
+
+GPTSOVITS_CONFIG = os.path.join(
+    os.path.dirname(__file__) or '.', 'GPT-SoVITS', 'GPT_SoVITS', 'configs', 'tts_infer.yaml'
+)
+
+
+def list_gptsovits_models():
+    """Read available model presets from tts_infer.yaml."""
+    try:
+        import yaml
+    except ImportError:
+        return ['custom']
+    try:
+        with open(GPTSOVITS_CONFIG, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f)
+        if not cfg:
+            return ['custom']
+        return list(cfg.keys())
+    except Exception:
+        return ['custom']
+
+
+def get_active_gptsovits_model():
+    """Get the currently active model preset name."""
+    try:
+        import yaml
+        with open(GPTSOVITS_CONFIG, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f)
+        if cfg and 'custom' in cfg:
+            custom = cfg['custom']
+            for name, preset in cfg.items():
+                if name == 'custom':
+                    continue
+                if (preset.get('t2s_weights_path') == custom.get('t2s_weights_path') and
+                        preset.get('vits_weights_path') == custom.get('vits_weights_path')):
+                    return name
+            return 'custom'
+    except Exception:
+        pass
+    return 'custom'
+
+
+def switch_gptsovits_model(preset_name):
+    """Switch the active GPT-SoVITS model by updating the custom section."""
+    try:
+        import yaml
+        with open(GPTSOVITS_CONFIG, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f)
+        if not cfg or preset_name not in cfg:
+            return False, f"Preset '{preset_name}' not found"
+        if preset_name == 'custom':
+            return True, "Already using custom config"
+        preset = cfg[preset_name].copy()
+        cfg['custom'] = preset
+        with open(GPTSOVITS_CONFIG, 'w', encoding='utf-8') as f:
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+        return True, f"Switched to {preset_name} (v{preset.get('version', '?')})"
+    except Exception as e:
+        return False, f"Failed to switch model: {e}"
+
+
 # ── STT runner ──────────────────────────────────────────
 
 def run_stt(cfg, stop_event, on_text, log_fn, set_status=None):
@@ -553,6 +617,13 @@ def main():
         elif event == 'GPT_STOP':
             log(gpt_manager.stop())
             update_srv_status(values.get('GPT_URL', 'http://127.0.0.1:9880'))
+
+        elif event == 'GPT_MODEL':
+            model_name = values.get('GPT_MODEL', '')
+            if model_name:
+                ok, msg = switch_gptsovits_model(model_name)
+                log(msg)
+
 
         # ── Start/Stop ───────────────────────────────────
         if event == 'START':
