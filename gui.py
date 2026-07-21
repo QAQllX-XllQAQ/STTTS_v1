@@ -139,16 +139,36 @@ def get_active_gptsovits_model():
     return 'custom'
 
 
-def switch_gptsovits_model(preset_name):
+def switch_gptsovits_model(preset_name, ckpt_path=None, pth_path=None):
     """Switch the active GPT-SoVITS model by updating the custom section."""
     try:
         import yaml
         with open(GPTSOVITS_CONFIG, 'r', encoding='utf-8') as f:
             cfg = yaml.safe_load(f)
-        if not cfg or preset_name not in cfg:
+        if not cfg:
+            return False, "Failed to read config"
+        if preset_name == 'custom' and ckpt_path and pth_path:
+            # User selected custom model files
+            if not os.path.exists(ckpt_path):
+                return False, f"CKPT not found: {ckpt_path}"
+            if not os.path.exists(pth_path):
+                return False, f"PTH not found: {pth_path}"
+            cfg['custom'] = {
+                'bert_base_path': 'GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large',
+                'cnhuhbert_base_path': 'GPT_SoVITS/pretrained_models/chinese-hubert-base',
+                'device': cfg.get('custom', {}).get('device', 'cuda'),
+                'is_half': cfg.get('custom', {}).get('is_half', True),
+                't2s_weights_path': ckpt_path,
+                'version': 'v2',
+                'vits_weights_path': pth_path,
+            }
+            with open(GPTSOVITS_CONFIG, 'w', encoding='utf-8') as f:
+                yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+            return True, f"Custom model set: {os.path.basename(pth_path)}"
+        if preset_name not in cfg:
             return False, f"Preset '{preset_name}' not found"
         if preset_name == 'custom':
-            return True, "Already using custom config"
+            return True, "Using custom config"
         preset = cfg[preset_name].copy()
         cfg['custom'] = preset
         with open(GPTSOVITS_CONFIG, 'w', encoding='utf-8') as f:
@@ -434,6 +454,15 @@ def main():
                  sg.Text('URL:'), sg.Input(
                     cfg_saved.get('GPT_URL', 'http://127.0.0.1:9880'),
                     key='GPT_URL', size=(20, 1))],
+                [sg.pin(sg.Col([
+                    [sg.Text('GPT .ckpt:'), sg.Input(
+                        key='GPT_CKPT', size=(40, 1)),
+                     sg.FileBrowse(file_types=(("CKPT", "*.ckpt"),))],
+                    [sg.Text('SoVITS .pth:'), sg.Input(
+                        key='GPT_PTH', size=(40, 1)),
+                     sg.FileBrowse(file_types=(("PTH", "*.pth"),))],
+                    [sg.Button('Apply Custom Model', key='GPT_APPLY_CUSTOM', size=(20, 1))],
+                ], key='COL_CUSTOM_MODEL', visible=False))],
                 [sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14, 1)),
                  sg.Button('■ GPT-SoVITS', key='GPT_STOP', size=(14, 1),
                            disabled=True, button_color='red'),
@@ -622,11 +651,23 @@ def main():
             log(gpt_manager.stop())
             update_srv_status(values.get('GPT_URL', 'http://127.0.0.1:9880'))
 
+        elif event == 'GPT_APPLY_CUSTOM':
+            ckpt = values.get('GPT_CKPT', '')
+            pth = values.get('GPT_PTH', '')
+            if ckpt and pth:
+                ok, msg = switch_gptsovits_model('custom', ckpt_path=ckpt, pth_path=pth)
+                log(msg)
+            else:
+                log('ERROR: Select both .ckpt and .pth files first')
+
         elif event == 'GPT_MODEL':
             model_name = values.get('GPT_MODEL', '')
             if model_name:
-                ok, msg = switch_gptsovits_model(model_name)
-                log(msg)
+                is_custom = (model_name == 'custom')
+                window['COL_CUSTOM_MODEL'].update(visible=is_custom)
+                if not is_custom:
+                    ok, msg = switch_gptsovits_model(model_name)
+                    log(msg)
 
 
         # ── Start/Stop ───────────────────────────────────
