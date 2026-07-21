@@ -138,9 +138,11 @@ def run_stt(cfg, stop_event, on_text, log_fn, set_status=None):
 # ── TTS playback ────────────────────────────────────────
 
 tts_lock = threading.Lock()
+_last_tts_file = None
 
 
 def play_tts(text, cfg, log_fn):
+    global _last_tts_file
     """Synthesize and play TTS based on config. Thread-safe."""
     with tts_lock:
         try:
@@ -156,14 +158,18 @@ def play_tts(text, cfg, log_fn):
                     out_device=out_device,
                     base_url=cfg.get('gpt_url', 'http://127.0.0.1:9880'),
                 )
+                _last_tts_file = _find_tts_cache('gptsovits_tmp.wav')
             elif tts_type == 'edge':
                 result = tts_edge(text, voice=cfg.get('voice', ''), out_device=out_device)
+                _last_tts_file = _find_tts_cache('edge_tts_tmp.mp3')
             elif tts_type == 'google':
                 result = tts_google(text, voice=cfg.get('voice', ''),
                                     api_key=cfg.get('gkey', ''), out_device=out_device)
+                _last_tts_file = _find_tts_cache('google_tts_tmp.wav')
             elif tts_type == 'mimo':
                 result = tts_mimo(text, voice=cfg.get('voice', 'mimo_default'),
                                   api_key=cfg.get('mimo_key', ''), out_device=out_device)
+                _last_tts_file = _find_tts_cache('mimo_tts_tmp.wav')
             else:
                 return
             log_fn(result)
@@ -171,7 +177,28 @@ def play_tts(text, cfg, log_fn):
             log_fn(f"TTS error: {e}")
 
 
-# ── Build PTT config from GUI values ────────────────────
+
+def _find_tts_cache(filename):
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), filename)
+    return path if os.path.exists(path) else None
+
+
+def replay_cached_tts(cfg, log_fn):
+    global _last_tts_file
+    if _last_tts_file and os.path.exists(_last_tts_file):
+        try:
+            from sttts.audio import play_wav
+            out_device = parse_device_index(cfg.get('DEV_OUT', ''))
+            play_wav(_last_tts_file, out_device)
+            log_fn("Replayed cached audio")
+        except Exception as e:
+            log_fn(f"Replay error: {e}")
+    else:
+        log_fn("No cached audio")
+
+
+# --- Build PTT config from GUI values --- from GUI values ────────────────────
 
 def build_ptt_cfg(values):
     """Build a PTT config dict from current GUI values."""
@@ -390,11 +417,15 @@ def main():
         except Exception:
             pass
 
-    def handle_text(text, cfg):
+    def handle_text(text, cfg, replay=False):
         """Handle recognized text: display and play TTS."""
         window.write_event_value('_TEXT', text)
-        log(f"Recognized: {text}")
-        threading.Thread(target=play_tts, args=(text, cfg, log), daemon=True).start()
+        if replay:
+            log(f"Replaying: {text}")
+            threading.Thread(target=replay_cached_tts, args=(cfg, log), daemon=True).start()
+        else:
+            log(f"Recognized: {text}")
+            threading.Thread(target=play_tts, args=(text, cfg, log), daemon=True).start()
 
     def update_srv_status(gpt_url):
         """Update GPT-SoVITS server status indicator."""

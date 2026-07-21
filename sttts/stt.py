@@ -595,7 +595,7 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
                         # Play key pressed — replay last text
                         if last_text and not stop_event.is_set():
                             log_fn(f"▶ Replaying: {last_text}")
-                            on_text(last_text)
+                            on_text(last_text, replay=True)
 
                     _user32.TranslateMessage(ctypes.byref(msg))
                     _user32.DispatchMessageW(ctypes.byref(msg))
