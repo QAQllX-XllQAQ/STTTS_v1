@@ -7,10 +7,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)) or '.', 'c
 
 # Keys that should be persisted
 PERSIST_KEYS = [
-    'GKEY', 'WHISPER_MODEL', 'GOOGLE_MODEL', 'MIMO_KEY', 'MIMO_LANG',
-    'VOICE', 'REF', 'GPT_URL', 'DEV_IN', 'DEV_OUT',
-    'STT_W', 'STT_G', 'STT_MIMO',
-    'TTS_GPT', 'TTS_EDGE', 'TTS_GOOGLE',
+    'TTS_GPT', 'TTS_EDGE', 'TTS_GOOGLE', 'TTS_MIMO',
     'GM_VAD', 'GM_CLOUD', 'MODE_CONT', 'MODE_PTT',
     'PTT_REC', 'PTT_PLAY',
 ]

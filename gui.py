@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from sttts.audio import list_devices, parse_device_index
 from sttts.config import load_config, save_config, get_default_ref_audio
 from sttts.tts import (
-    tts_gptsovits, tts_edge, tts_google, check_gptsovits,
-    EDGE_VOICES, GOOGLE_VOICES,
+    tts_gptsovits, tts_edge, tts_google, tts_mimo, check_gptsovits,
+    EDGE_VOICES, GOOGLE_VOICES, MIMO_VOICES,
 )
 from sttts.stt import stt_whisper, stt_google_vad, stt_google_cloud, stt_mimo, stt_ptt
 
@@ -54,6 +54,7 @@ class GPTSoVITSManager:
             self.process = subprocess.Popen(
                 self.GPT_CMD,
                 cwd=cwd or os.path.join(os.path.dirname(__file__) or '.', 'GPT-SoVITS'),
+                shell=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -160,6 +161,9 @@ def play_tts(text, cfg, log_fn):
             elif tts_type == 'google':
                 result = tts_google(text, voice=cfg.get('voice', ''),
                                     api_key=cfg.get('gkey', ''), out_device=out_device)
+            elif tts_type == 'mimo':
+                result = tts_mimo(text, voice=cfg.get('voice', 'mimo_default'),
+                                  api_key=cfg.get('mimo_key', ''), out_device=out_device)
             else:
                 return
             log_fn(result)
@@ -179,7 +183,7 @@ def build_ptt_cfg(values):
 
     return {
         'stt': 'ptt',
-        'tts': 'gpt' if values.get('TTS_GPT') else ('google' if values.get('TTS_GOOGLE') else 'edge'),
+        'tts': 'gpt' if values.get('TTS_GPT') else ('google' if values.get('TTS_GOOGLE') else ('mimo' if values.get('TTS_MIMO') else 'edge')),
         'dev_in': parse_device_index(values.get('DEV_IN', '')),
         'dev_out': parse_device_index(values.get('DEV_OUT', '')),
         'ref': values.get('REF', ''),
@@ -212,7 +216,7 @@ def build_run_cfg(values):
     else:
         stt = 'whisper'
 
-    tts = 'gpt' if values.get('TTS_GPT') else ('google' if values.get('TTS_GOOGLE') else 'edge')
+    tts = 'gpt' if values.get('TTS_GPT') else ('google' if values.get('TTS_GOOGLE') else ('mimo' if values.get('TTS_MIMO') else 'edge'))
 
     cfg = {
         'stt': stt,
@@ -254,6 +258,8 @@ def switch_tts_visibility(window, tts_mode):
         window['VOICE'].update(values=EDGE_VOICES, value='zh-CN-XiaoxiaoNeural')
     elif tts_mode == 'google':
         window['VOICE'].update(values=GOOGLE_VOICES, value='Auto (default)')
+    elif tts_mode == 'mimo':
+        window['VOICE'].update(values=MIMO_VOICES, value='mimo_default')
     else:
         window['VOICE'].update(values=[], value='')
 
@@ -322,7 +328,8 @@ def main():
         [sg.Frame('TTS Engine', [
             [sg.Radio('GPT-SoVITS', 'TTS', key='TTS_GPT', default=True, enable_events=True),
              sg.Radio('Edge-TTS', 'TTS', key='TTS_EDGE', enable_events=True),
-             sg.Radio('Google TTS', 'TTS', key='TTS_GOOGLE', enable_events=True)],
+             sg.Radio('Google TTS', 'TTS', key='TTS_GOOGLE', enable_events=True),
+             sg.Radio('MiMo TTS', 'TTS', key='TTS_MIMO', enable_events=True)],
             [sg.pin(sg.Col([
                 [sg.Text('Ref audio:'), sg.Input(
                     key='REF', size=(42, 1), default_text=default_ref),
@@ -428,6 +435,9 @@ def main():
     elif cfg_saved.get('TTS_GOOGLE'):
         window['TTS_GOOGLE'].update(value=True)
         switch_tts_visibility(window, 'google')
+    elif cfg_saved.get('TTS_MIMO'):
+        window['TTS_MIMO'].update(value=True)
+        switch_tts_visibility(window, 'mimo')
     else:
         switch_tts_visibility(window, 'gpt')
 
@@ -482,7 +492,7 @@ def main():
                 window['STATUS'].update('⏹ Stopped', text_color='blue')
 
         # ── TTS engine switch ────────────────────────────
-        if event in ('TTS_GPT', 'TTS_EDGE', 'TTS_GOOGLE'):
+        if event in ('TTS_GPT', 'TTS_EDGE', 'TTS_GOOGLE', 'TTS_MIMO'):
             try:
                 if values['TTS_GPT']:
                     switch_tts_visibility(window, 'gpt')
@@ -490,6 +500,8 @@ def main():
                     switch_tts_visibility(window, 'edge')
                 elif values['TTS_GOOGLE']:
                     switch_tts_visibility(window, 'google')
+                elif values['TTS_MIMO']:
+                    switch_tts_visibility(window, 'mimo')
                 save_config(values)
             except Exception:
                 pass

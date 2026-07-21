@@ -1,4 +1,4 @@
-"""TTS engines: GPT-SoVITS, Edge-TTS, Google Cloud TTS."""
+"""TTS engines: GPT-SoVITS, Edge-TTS, Google Cloud TTS, MiMo TTS."""
 
 import base64
 import os
@@ -21,6 +21,12 @@ GOOGLE_VOICES = [
     'zh-CN-Neural2-A', 'zh-CN-Neural2-B', 'zh-CN-Neural2-C', 'zh-CN-Neural2-D',
     'zh-CN-Standard-A', 'zh-CN-Standard-B', 'zh-CN-Standard-C', 'zh-CN-Standard-D',
     'zh-CN-Studio-A', 'zh-CN-Studio-B', 'zh-CN-Studio-C',
+]
+
+# MiMo TTS voices
+MIMO_VOICES = [
+    'mimo_default', '冰糖', '茉莉', '苏打', '白桦',
+    'Mia', 'Chloe', 'Milo', 'Dean',
 ]
 
 
@@ -146,7 +152,56 @@ def tts_google(text, voice='Auto (default)', api_key='', out_device=None):
     with open(tmp, 'wb') as f:
         f.write(audio_bytes)
     play_wav(tmp, out_device)
-    return "Google TTS OK"
+# ── MiMo TTS ─────────────────────────────────────────────
+
+def tts_mimo(text, voice='mimo_default', api_key='', out_device=None):
+    """Synthesize speech via Xiaomi MiMo TTS and play it.
+
+    Args:
+        text: Text to synthesize.
+        voice: MiMo voice ID (e.g. '冰糖', 'Chloe', 'mimo_default').
+        api_key: MiMo API key.
+        out_device: Output device index (None = default).
+
+    Returns:
+        Status string.
+
+    Raises:
+        RuntimeError: If TTS fails.
+    """
+    if not text:
+        raise ValueError("Empty text")
+
+    url = 'https://api.xiaomimimo.com/v1/chat/completions'
+    body = {
+        'model': 'mimo-v2.5-tts',
+        'messages': [
+            {'role': 'assistant', 'content': text},
+        ],
+        'audio': {
+            'format': 'wav',
+            'voice': voice or 'mimo_default',
+        },
+    }
+    headers = {
+        'api-key': api_key,
+        'Content-Type': 'application/json',
+    }
+    resp = requests.post(url, json=body, headers=headers, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(f"MiMo TTS HTTP {resp.status_code}: {resp.text[:200]}")
+
+    data = resp.json()
+    audio_b64 = data.get('choices', [{}])[0].get('message', {}).get('audio', {}).get('data', '')
+    if not audio_b64:
+        raise RuntimeError("MiMo TTS returned no audio data")
+
+    audio_bytes = base64.b64decode(audio_b64)
+    tmp = os.path.join(tempfile.gettempdir(), 'mimo_tts_tmp.wav')
+    with open(tmp, 'wb') as f:
+        f.write(audio_bytes)
+    play_wav(tmp, out_device)
+    return f"MiMo TTS OK ({len(audio_bytes) // 1024}KB)"
 
 
 # ── Dispatcher ───────────────────────────────────────────
@@ -155,8 +210,8 @@ TTS_ENGINES = {
     'gpt': tts_gptsovits,
     'edge': tts_edge,
     'google': tts_google,
+    'mimo': tts_mimo,
 }
-
 
 def check_gptsovits(base_url='http://127.0.0.1:9880'):
     """Check if GPT-SoVITS API is running. Returns status string."""
