@@ -252,16 +252,16 @@ def switch_stt_visibility(window, is_google, is_mimo):
 def switch_tts_visibility(window, tts_mode):
     """Show/hide TTS-related UI columns."""
     show_gpt = tts_mode == 'gpt'
+    show_voice = tts_mode in ('edge', 'google', 'mimo')
     window['COL_REF'].update(visible=show_gpt)
     window['COL_GPT'].update(visible=show_gpt)
+    window['VOICE'].update(visible=show_voice)
     if tts_mode == 'edge':
-        window['VOICE'].update(values=EDGE_VOICES, value='zh-CN-XiaoxiaoNeural')
+        window['VOICE'].update(values=EDGE_VOICES, value='zh-CN-XiaoxiaoNeural', visible=True)
     elif tts_mode == 'google':
-        window['VOICE'].update(values=GOOGLE_VOICES, value='Auto (default)')
+        window['VOICE'].update(values=GOOGLE_VOICES, value='Auto (default)', visible=True)
     elif tts_mode == 'mimo':
-        window['VOICE'].update(values=MIMO_VOICES, value='mimo_default')
-    else:
-        window['VOICE'].update(values=[], value='')
+        window['VOICE'].update(values=MIMO_VOICES, value='mimo_default', visible=True)
 
 
 # ── Main ────────────────────────────────────────────────
@@ -327,8 +327,8 @@ def main():
         ])],
         [sg.Frame('TTS Engine', [
             [sg.Radio('GPT-SoVITS', 'TTS', key='TTS_GPT', default=True, enable_events=True),
-             sg.Radio('Edge-TTS', 'TTS', key='TTS_EDGE', enable_events=True),
-             sg.Radio('Google TTS', 'TTS', key='TTS_GOOGLE', enable_events=True),
+             sg.Radio('Edge-TTS', 'TTS', key='TTS_EDGE', enable_events=True)],
+            [sg.Radio('Google TTS', 'TTS', key='TTS_GOOGLE', enable_events=True),
              sg.Radio('MiMo TTS', 'TTS', key='TTS_MIMO', enable_events=True)],
             [sg.pin(sg.Col([
                 [sg.Text('Ref audio:'), sg.Input(
