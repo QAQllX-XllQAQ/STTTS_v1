@@ -427,9 +427,13 @@ def main():
                  sg.FileBrowse(file_types=(("WAV", "*.wav"),))],
             ], key='COL_REF', visible=True))],
             [sg.pin(sg.Col([
-                [sg.Text('GPT URL:'), sg.Input(
+                [sg.Text('Model:'), sg.Combo(
+                    list_gptsovits_models(),
+                    default_value=get_active_gptsovits_model(),
+                    key='GPT_MODEL', size=(15, 1), enable_events=True),
+                 sg.Text('URL:'), sg.Input(
                     cfg_saved.get('GPT_URL', 'http://127.0.0.1:9880'),
-                    key='GPT_URL', size=(35, 1))],
+                    key='GPT_URL', size=(20, 1))],
                 [sg.Button('▶ GPT-SoVITS', key='GPT_START', size=(14, 1)),
                  sg.Button('■ GPT-SoVITS', key='GPT_STOP', size=(14, 1),
                            disabled=True, button_color='red'),
