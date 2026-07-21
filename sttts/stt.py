@@ -325,7 +325,7 @@ _VK_MAP = {
     'backspace': 0x08, 'delete': 0x2E, 'insert': 0x2D,
     'home': 0x24, 'end': 0x23, 'pageup': 0x21, 'pagedown': 0x22,
     'up': 0x26, 'down': 0x28, 'left': 0x25, 'right': 0x27,
-    'capslock': 0x14, 'numlock': 0x90, 'scrolllock': 0x91,
+    'capslock': 0x14, '`': 0xC0, 'numlock': 0x90, 'scrolllock': 0x91,
     'printscreen': 0x2C, 'pause': 0x13,
 }
 import string as _string
