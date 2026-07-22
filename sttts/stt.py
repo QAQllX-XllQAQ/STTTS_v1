@@ -338,6 +338,26 @@ for _c in _string.digits:
 WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
 
+# Low-level keyboard hook (for CapsLock handling)
+WH_KEYBOARD_LL = 13
+HC_ACTION = 0
+VK_CAPITAL = 0x14
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", ctypes.wintypes.DWORD),
+        ("scanCode", ctypes.wintypes.DWORD),
+        ("flags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+HOOKPROC = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_int, ctypes.wintypes.WPARAM, ctypes.POINTER(KBDLLHOOKSTRUCT))
+
 _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
 _GetAsyncKeyState = _user32.GetAsyncKeyState
@@ -361,6 +381,12 @@ _user32.PeekMessageW.argtypes = [ctypes.c_void_p, ctypes.wintypes.HWND, ctypes.c
 _user32.PeekMessageW.restype = ctypes.wintypes.BOOL
 _user32.DefWindowProcW.argtypes = [ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM]
 _user32.DefWindowProcW.restype = ctypes.wintypes.LPARAM
+_user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, ctypes.wintypes.HINSTANCE, ctypes.wintypes.DWORD]
+_user32.SetWindowsHookExW.restype = ctypes.wintypes.HHOOK
+_user32.UnhookWindowsHookEx.argtypes = [ctypes.wintypes.HHOOK]
+_user32.UnhookWindowsHookEx.restype = ctypes.wintypes.BOOL
+_user32.CallNextHookEx.argtypes = [ctypes.wintypes.HHOOK, ctypes.c_int, ctypes.wintypes.WPARAM, ctypes.POINTER(KBDLLHOOKSTRUCT)]
+_user32.CallNextHookEx.restype = ctypes.c_long
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
 
@@ -502,7 +528,37 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
 
     # ── RegisterHotKey + message loop (Discord-style) ──────────
 
-    # Create an invisible message-only window
+    # CapsLock uses a low-level hook to avoid toggle desync
+    is_capslock = (rec_vk == VK_CAPITAL)
+    capslock_pressed = False  # flag set by hook
+    _hook_handle = None
+    _hook_proc_ref = None  # prevent GC of callback
+
+    if is_capslock:
+        def _capslock_hook(nCode, wParam, lParam):
+            global capslock_pressed
+            if nCode == HC_ACTION:
+                vk = lParam.contents.vkCode
+                if vk == VK_CAPITAL:
+                    if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        capslock_pressed = True
+                    elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                        capslock_pressed = False
+                    return 1  # suppress the toggle
+            return _user32.CallNextHookEx(_hook_handle, nCode, wParam, lParam)
+
+        _hook_proc_ref = HOOKPROC(_capslock_hook)
+        _hook_handle = _user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL, _hook_proc_ref,
+            _kernel32.GetModuleHandleW(None), 0,
+        )
+        if _hook_handle:
+            log_fn(f"CapsLock hook installed (hold [{rec_key}] to record)")
+        else:
+            log_fn(f"WARNING: CapsLock hook failed, falling back to RegisterHotKey")
+            is_capslock = False
+
+    # Always create a message window (needed for play_key hotkey)
     _def_proc = WNDPROC(lambda h, m, w, l: _user32.DefWindowProcW(h, m, w, l))
     wc = WNDCLASS()
     wc.lpfnWndProc = _def_proc
@@ -519,97 +575,127 @@ def stt_ptt(dev_idx, rec_key, play_key, engine, engine_cfg,
     log_fn(f"[debug] CreateWindowExW hwnd={hwnd} err={wnd_err}")
     if not hwnd:
         log_fn(f"ERROR: Failed to create hotkey window (class_err={reg_err}, wnd_err={wnd_err})")
+        if _hook_handle:
+            _user32.UnhookWindowsHookEx(_hook_handle)
         stream.stop_stream(); stream.close(); p.terminate()
         return
 
-    # Register global hotkeys — with all modifier combos so they work
-    # even when Shift/Ctrl/Alt are held (e.g. in-game)
-    MODIFIERS = [0, 0x0001, 0x0002, 0x0004, 0x0003, 0x0005, 0x0006, 0x0007]  # none,Alt,Ctrl,Ctrl+Alt,Shift+Ctrl,Shift+Alt,Shift+Ctrl+Alt,Shift
+    # Register play_key hotkey (always, for both modes)
+    MODIFIERS = [0, 0x0001, 0x0002, 0x0004, 0x0003, 0x0005, 0x0006, 0x0007]
     rec_ids = []
     play_ids = []
     next_id = 10
 
     for mod in MODIFIERS:
-        rid = next_id; next_id += 1
-        if _user32.RegisterHotKey(hwnd, rid, mod | MOD_NOREPEAT, rec_vk):
-            rec_ids.append(rid)
         pid = next_id; next_id += 1
         if _user32.RegisterHotKey(hwnd, pid, mod | MOD_NOREPEAT, play_vk):
             play_ids.append(pid)
 
-    if not rec_ids:
-        log_fn(f"ERROR: Failed to register any hotkey for [{rec_key}]")
-        _user32.DestroyWindow(hwnd)
-        stream.stop_stream(); stream.close(); p.terminate()
-        return
+    # Register rec_key hotkey only for non-CapsLock mode
+    if not is_capslock:
+        for mod in MODIFIERS:
+            rid = next_id; next_id += 1
+            if _user32.RegisterHotKey(hwnd, rid, mod | MOD_NOREPEAT, rec_vk):
+                rec_ids.append(rid)
 
-    log_fn(f"Hotkeys registered: [{rec_key}] record ({len(rec_ids)} combos), [{play_key}] replay ({len(play_ids)} combos)")
+        if not rec_ids:
+            log_fn(f"ERROR: Failed to register any hotkey for [{rec_key}]")
+            _user32.DestroyWindow(hwnd)
+            stream.stop_stream(); stream.close(); p.terminate()
+            return
 
-    # Message loop in a background thread
+        log_fn(f"Hotkeys registered: [{rec_key}] record ({len(rec_ids)} combos), [{play_key}] replay ({len(play_ids)} combos)")
+    else:
+        log_fn(f"CapsLock hook active, [{play_key}] replay hotkey registered ({len(play_ids)} combos)")
+
+    # Message loop
     msg = ctypes.wintypes.MSG()
     last_text = ""
     recording = False
     audio_frames = []
-    hotkey_thread_id = _kernel32.GetCurrentThreadId()
 
     def _is_key_held(vk):
         return (_GetAsyncKeyState(vk) & 0x8000) != 0
 
+    def _start_recording():
+        nonlocal recording, audio_frames
+        recording = True
+        audio_frames = []
+        log_fn("🔴 Recording...")
+        if set_status:
+            set_status('🔴 Recording...')
+
+    def _stop_recording():
+        nonlocal recording, last_text
+        recording = False
+        log_fn("⏹ Stopped, transcribing...")
+        if set_status:
+            set_status('⏳ Transcribing...')
+        if audio_frames and model_ready:
+            text = transcribe_audio(b''.join(audio_frames))
+            if text and not stop_event.is_set():
+                last_text = text
+                on_text(text)
+        if set_status:
+            set_status('🟢 PTT listening...')
+
+    def _replay():
+        if last_text and not stop_event.is_set():
+            log_fn(f"▶ Replaying: {last_text}")
+            on_text(last_text, replay=True)
+
     try:
         while not stop_event.is_set():
-            # GetMessageW blocks until a message arrives or timeout
-            has_msg = _user32.PeekMessageW(ctypes.byref(msg), hwnd, 0, 0, 1)  # PM_REMOVE
-            if has_msg:
-                if msg.message == WM_HOTKEY:
-                    if msg.wParam in rec_ids:
-                        # Rec key pressed — start recording
-                        recording = True
-                        audio_frames = []
-                        log_fn("🔴 Recording...")
-                        if set_status:
-                            set_status('🔴 Recording...')
-
-                        # Record while key is held
-                        while _is_key_held(rec_vk) and not stop_event.is_set():
-                            try:
-                                data = stream.read(512, exception_on_overflow=False)
-                                audio_frames.append(data)
-                            except Exception:
-                                pass
-
-                        # Key released — transcribe
-                        recording = False
-                        log_fn("⏹ Stopped, transcribing...")
-                        if set_status:
-                            set_status('⏳ Transcribing...')
-                        if audio_frames and model_ready:
-                            text = transcribe_audio(b''.join(audio_frames))
-                            if text and not stop_event.is_set():
-                                last_text = text
-                                on_text(text)
-                        audio_frames = []
-                        if set_status:
-                            set_status('🟢 PTT listening...')
-
-                    elif msg.wParam in play_ids:
-                        # Play key pressed — replay last text
-                        if last_text and not stop_event.is_set():
-                            log_fn(f"▶ Replaying: {last_text}")
-                            on_text(last_text, replay=True)
-
+            if is_capslock:
+                # CapsLock mode: poll the hook flag
+                if capslock_pressed and not recording:
+                    _start_recording()
+                    while capslock_pressed and not stop_event.is_set():
+                        try:
+                            data = stream.read(512, exception_on_overflow=False)
+                            audio_frames.append(data)
+                        except Exception:
+                            pass
+                    _stop_recording()
+                # Process play key via RegisterHotKey (still works for non-toggle keys)
+                has_msg = _user32.PeekMessageW(ctypes.byref(msg), hwnd, 0, 0, 1)
+                if has_msg and msg.message == WM_HOTKEY and msg.wParam in play_ids:
+                    _replay()
                     _user32.TranslateMessage(ctypes.byref(msg))
                     _user32.DispatchMessageW(ctypes.byref(msg))
-            else:
-                # No message — sleep briefly to avoid busy-waiting
                 import time
                 time.sleep(0.02)
+            else:
+                # RegisterHotKey mode
+                has_msg = _user32.PeekMessageW(ctypes.byref(msg), hwnd, 0, 0, 1)
+                if has_msg:
+                    if msg.message == WM_HOTKEY:
+                        if msg.wParam in rec_ids:
+                            _start_recording()
+                            while _is_key_held(rec_vk) and not stop_event.is_set():
+                                try:
+                                    data = stream.read(512, exception_on_overflow=False)
+                                    audio_frames.append(data)
+                                except Exception:
+                                    pass
+                            _stop_recording()
+                        elif msg.wParam in play_ids:
+                            _replay()
+                    _user32.TranslateMessage(ctypes.byref(msg))
+                    _user32.DispatchMessageW(ctypes.byref(msg))
+                else:
+                    import time
+                    time.sleep(0.02)
 
     finally:
-        for rid in rec_ids:
-            _user32.UnregisterHotKey(hwnd, rid)
-        for pid in play_ids:
-            _user32.UnregisterHotKey(hwnd, pid)
-        _user32.DestroyWindow(hwnd)
+        if _hook_handle:
+            _user32.UnhookWindowsHookEx(_hook_handle)
+        if not is_capslock:
+            for rid in rec_ids:
+                _user32.UnregisterHotKey(hwnd, rid)
+            for pid in play_ids:
+                _user32.UnregisterHotKey(hwnd, pid)
+            _user32.DestroyWindow(hwnd)
         stream.stop_stream()
         stream.close()
         p.terminate()

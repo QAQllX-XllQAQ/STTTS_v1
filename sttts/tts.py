@@ -32,8 +32,12 @@ MIMO_VOICES = [
 
 # ── GPT-SoVITS ───────────────────────────────────────────
 
-def tts_gptsovits(text, ref_audio, prompt_lang='ja', prompt_text='',
-                  out_device=None, base_url='http://127.0.0.1:9880'):
+def tts_gptsovits(text, ref_audio, prompt_lang='zh', prompt_text='',
+                  text_lang='zh',
+                  out_device=None, base_url='http://127.0.0.1:9880',
+                  top_k=20, top_p=0.6, temperature=0.6, speed_factor=1.0,
+                  repetition_penalty=1.35,
+                  text_split_method='cut1'):
     """Synthesize speech via GPT-SoVITS API and play it.
 
     Args:
@@ -43,6 +47,11 @@ def tts_gptsovits(text, ref_audio, prompt_lang='ja', prompt_text='',
         prompt_text: Text content of the reference audio (optional).
         out_device: Output device index (None = default).
         base_url: GPT-SoVITS API base URL.
+        top_k: Top-k sampling parameter.
+        top_p: Top-p sampling parameter.
+        temperature: Sampling temperature.
+        speed_factor: Speech speed factor.
+        text_split_method: Text split method (cut5, cut4, etc).
 
     Returns:
         Status string describing the result.
@@ -58,14 +67,20 @@ def tts_gptsovits(text, ref_audio, prompt_lang='ja', prompt_text='',
     url = f'{base_url}/tts'
     params = {
         'text': text,
-        'text_lang': 'zh',
+        'text_lang': text_lang,
         'ref_audio_path': ref_audio,
         'prompt_lang': prompt_lang,
         'prompt_text': prompt_text,
-        'text_split_method': 'cut5',
+        'text_split_method': text_split_method,
         'batch_size': 1,
         'media_type': 'wav',
         'streaming_mode': False,
+        'top_k': int(top_k),
+        'top_p': float(top_p),
+        'temperature': float(temperature),
+        'speed_factor': float(speed_factor),
+        'repetition_penalty': float(repetition_penalty),
+        'seed': -1,
     }
     resp = requests.get(url, params=params, timeout=30)
     if resp.status_code != 200:
